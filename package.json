@@ -1,0 +1,9 @@
+{
+  "name": "midian-duijue",
+  "version": "1.0.0",
+  "description": "密电对决 —— 4~8 人两队对抗的解码猜词游戏",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=16" },
+  "license": "MIT"
+}

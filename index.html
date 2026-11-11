@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>密电对决</title>
+<style>
+:root{
+  --bg:#10151d; --bg2:#161d28; --panel:#1b2330; --line:#2c3748; --ink:#e9edf3; --muted:#93a0b3; --dim:#5d6a7d;
+  --red:#d9503f; --red2:#3a1f1e; --blue:#3f86d9; --blue2:#1b2a3d; --gold:#e2b24f; --ok:#4fbf7f; --bad:#e0605a;
+  --paper:#f3ead7; --paper-ink:#2a2418;
+  --mono:"SFMono-Regular",Menlo,Consolas,"Courier New",monospace;
+  --serif:"Songti SC","STSong","SimSun","Noto Serif CJK SC",serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.6 "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+  background-image:radial-gradient(900px 500px at 15% -10%,#1d2a3c 0%,transparent 60%),repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px)}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 14px;font-weight:600;color:var(--ink);background:#2a3546;transition:filter .12s,transform .06s}
+button:hover:not(:disabled){filter:brightness(1.18)}
+button:active:not(:disabled){transform:scale(.97)}
+button:disabled{opacity:.4;cursor:default}
+button.gold{background:var(--gold);color:#241a06}
+button.ghost{background:transparent;border:1px solid var(--line)}
+button.redb{background:var(--red);color:#fff}
+button.blueb{background:var(--blue);color:#fff}
+input[type=text],select{font:inherit;font-size:15px;padding:9px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg2);color:var(--ink);outline:none;width:100%}
+input[type=text]:focus{border-color:var(--gold)}
+h1,h2,h3{margin:0}
+[hidden]{display:none!important}
+.muted{color:var(--muted)} .small{font-size:12px}
+.row{display:flex;gap:8px;align-items:center} .sp{flex:1}
+.red{color:var(--red)} .blue{color:var(--blue)}
+
+/* 首页 */
+.home{max-width:440px;margin:9vh auto;padding:0 16px}
+.logo{font-family:var(--serif);font-size:52px;letter-spacing:.18em;text-align:center;font-weight:900}
+.logo i{font-style:normal;color:var(--gold)}
+.tag{text-align:center;color:var(--muted);margin:4px 0 28px;letter-spacing:.12em;font-family:var(--mono);font-size:12px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+.err{color:var(--bad);min-height:20px;margin-top:8px;font-size:13px}
+
+/* 大厅 */
+.lobby{max-width:820px;margin:5vh auto;padding:0 16px}
+.teams{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
+.tcol{border-radius:12px;padding:12px;border:1px solid var(--line);background:var(--bg2);min-height:170px;display:flex;flex-direction:column}
+.tcol.red{border-top:4px solid var(--red)} .tcol.blue{border-top:4px solid var(--blue)}
+.tcol h3{font-size:17px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.mem{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,.03);margin-bottom:4px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.dot.off{background:var(--dim)}
+.badge{font-size:11px;padding:0 6px;border-radius:4px;background:#2a3546;color:var(--muted)}
+.badge.gold{background:var(--gold);color:#241a06}
+.unassigned{margin:6px 0 14px}
+.settings{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px;border:1px dashed var(--line);border-radius:10px;margin-bottom:14px}
+.settings label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.settings select{width:auto;padding:5px 8px}
+
+/* 游戏 */
+.app{display:grid;grid-template-columns:290px 1fr 300px;min-height:100vh}
+.col{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.left{border-right:1px solid var(--line);background:rgba(0,0,0,.18)}
+.right{border-left:1px solid var(--line);background:rgba(0,0,0,.18);height:100vh;position:sticky;top:0}
+.top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.top h2{font-family:var(--serif);font-size:24px;letter-spacing:.12em}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+.chip b{color:var(--ink)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+.card h3{font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.08em;margin-bottom:8px}
+.teamtag{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:999px;color:#fff}
+.teamtag.red{background:var(--red)} .teamtag.blue{background:var(--blue)}
+
+.words{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.word{background:var(--paper);color:var(--paper-ink);border-radius:8px;padding:8px 10px;position:relative;box-shadow:0 4px 0 rgba(0,0,0,.25)}
+.word .no{font-family:var(--mono);font-weight:800;font-size:12px;opacity:.6}
+.word .w{font-family:var(--serif);font-size:20px;font-weight:900;line-height:1.25}
+.word.red{border-left:5px solid var(--red)} .word.blue{border-left:5px solid var(--blue)}
+
+.score{display:grid;grid-template-columns:1fr;gap:8px}
+.sc{border-radius:10px;padding:8px 10px;background:var(--bg2);border:1px solid var(--line)}
+.sc.red{border-left:4px solid var(--red)} .sc.blue{border-left:4px solid var(--blue)}
+.tk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);margin-top:6px;white-space:nowrap}
+.sc .hd{display:flex;align-items:center;gap:8px}
+.sc .flags{display:flex;gap:6px;flex-wrap:wrap}
+.tk .cnt{margin-left:auto;font-family:var(--mono);font-weight:800;color:var(--dim)}
+.pip{width:22px;height:22px;border-radius:50%;border:2px dashed var(--dim);display:inline-grid;place-items:center;
+  font-size:13px;font-weight:900;line-height:1;color:#fff;flex:none}
+.pip.w.on{background:var(--ok);border:2px solid var(--ok);box-shadow:0 0 10px -2px var(--ok)}
+.pip.k.on{background:var(--bad);border:2px solid var(--bad);box-shadow:0 0 10px -2px var(--bad)}
+.tk.hotw .cnt{color:var(--ok)} .tk.hotk .cnt{color:var(--bad)}
+.danger{margin-top:6px;font-size:11px;font-weight:700;color:var(--bad);background:rgba(224,96,90,.12);border-radius:5px;padding:2px 6px}
+.chance{margin-top:6px;font-size:11px;font-weight:700;color:var(--ok);background:rgba(79,191,127,.12);border-radius:5px;padding:2px 6px}
+.legend{display:flex;align-items:center;gap:6px;margin-top:4px}
+.legend .pip{width:18px;height:18px;font-size:11px}
+.plist .mem{font-size:13px}
+
+.stage{min-height:230px}
+.code{display:flex;gap:10px;justify-content:center;margin:6px 0 14px}
+.code span{width:58px;height:70px;border-radius:10px;background:var(--paper);color:var(--paper-ink);display:grid;place-items:center;
+  font-family:var(--mono);font-size:40px;font-weight:900;box-shadow:0 5px 0 rgba(0,0,0,.35)}
+.clueRow{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;margin-bottom:8px}
+.clueRow .lbl{font-size:13px;color:var(--muted)}
+.clueRow .lbl b{color:var(--ink);font-family:var(--serif);font-size:15px}
+.timer{font-family:var(--mono);font-size:20px;font-weight:800;color:var(--gold)}
+.timer.urgent{color:var(--bad)}
+.hint{font-size:12px;color:var(--muted)}
+.warn{font-size:13px;color:var(--bad)}
+
+.gblock{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--bg2)}
+.gblock.red{border-left:4px solid var(--red)} .gblock.blue{border-left:4px solid var(--blue)}
+.gblock h4{margin:0 0 8px;font-size:14px;display:flex;gap:8px;align-items:center}
+.gline{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:center;padding:5px 0;border-top:1px dashed var(--line)}
+.gline:first-of-type{border-top:0}
+.gline .i{font-family:var(--mono);color:var(--dim)}
+.gline .c{font-family:var(--serif);font-size:18px;font-weight:700}
+.pick{display:flex;gap:4px}
+.pick button{width:34px;height:34px;padding:0;font-family:var(--mono);font-size:16px;background:#232d3c;border:1px solid var(--line)}
+.pick button.on{background:var(--gold);color:#241a06;border-color:var(--gold)}
+.pick button.dup{background:var(--bad);color:#fff;border-color:var(--bad)}
+.pick.ro button{cursor:default}
+.ans{font-family:var(--mono);font-size:18px;font-weight:800;letter-spacing:.15em}
+.lockbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.steps{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.stp{font-size:13px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.stp.on.red{background:var(--red);border-color:var(--red);color:#fff}
+.stp.on.blue{background:var(--blue);border-color:var(--blue);color:#fff}
+.stp.done{color:var(--ok);border-color:var(--ok)}
+
+.rv{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rvc{border-radius:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--line)}
+.rvc.red{border-top:4px solid var(--red)} .rvc.blue{border-top:4px solid var(--blue)}
+.rvc .cl{display:flex;gap:8px;align-items:baseline;padding:3px 0}
+.rvc .cl b{font-family:var(--mono);color:var(--gold);width:16px}
+.rvc .cl span{font-family:var(--serif);font-size:16px}
+.res{margin-top:6px;font-size:13px}
+.ok{color:var(--ok);font-weight:700} .no{color:var(--bad);font-weight:700}
+.banner{text-align:center;font-family:var(--serif);font-size:30px;font-weight:900;letter-spacing:.1em;margin:4px 0 6px}
+
+.sheets{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}
+th,td{border:1px solid var(--line);padding:5px 6px;text-align:center;vertical-align:top;word-break:break-all}
+th{background:var(--bg2);font-weight:600}
+th .w{display:block;font-family:var(--serif);font-size:14px;color:var(--ink)}
+th .n{font-family:var(--mono);color:var(--muted);font-size:11px}
+td{font-family:var(--serif);font-size:14px;background:rgba(243,234,215,.03)}
+td div{padding:2px 0;border-bottom:1px dashed rgba(255,255,255,.06)}
+td div:last-child{border-bottom:0}
+
+/* 聊天 */
+.chatbox{flex:1;display:flex;flex-direction:column;min-height:0}
+.msgs{flex:1;overflow:auto;padding:4px 2px;display:flex;flex-direction:column;gap:6px;min-height:200px}
+.msg{background:var(--bg2);border-radius:8px;padding:5px 9px;max-width:92%;word-break:break-word}
+.msg.me{align-self:flex-end;background:#2a3a52}
+.msg .who{font-size:11px;color:var(--muted)}
+.msg.sys{align-self:center;background:transparent;color:var(--dim);font-size:12px;text-align:center}
+.chatin{display:flex;gap:6px;margin-top:8px}
+.chatin input{font-size:14px;min-width:0}
+.chatin button{flex:none;white-space:nowrap}
+
+/* 弹窗 */
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.65);display:grid;place-items:center;z-index:20;padding:16px}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:640px;width:100%;max-height:90vh;overflow:auto}
+.modal h2{font-family:var(--serif);font-size:22px;margin-bottom:10px}
+.modal p{margin:0 0 10px}
+.toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:var(--bad);color:#fff;padding:8px 16px;border-radius:999px;z-index:30;font-size:14px;max-width:90vw}
+.conn{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:6px 14px;border-radius:999px;font-size:13px;z-index:30}
+
+@media (max-width:1100px){
+  .app{grid-template-columns:260px 1fr}
+  .right{grid-column:1/-1;height:auto;position:static;border-left:0;border-top:1px solid var(--line)}
+  .msgs{max-height:40vh}
+}
+@media (max-width:760px){
+  .app{grid-template-columns:1fr}
+  .left{border-right:0;border-bottom:1px solid var(--line)}
+  .teams,.rv,.sheets{grid-template-columns:1fr}
+  .clueRow{grid-template-columns:1fr}
+  .gline{grid-template-columns:24px 1fr}
+  .gline .pick{grid-column:1/-1}
+}
+</style>
+</head>
+<body>
+
+<!-- 首页 -->
+<div class="home" id="home">
+  <div class="logo">密电<i>对决</i></div>
+  <p class="tag">4–8 人 · 两队对抗 · 加密 / 破译 / 拦截</p>
+  <div class="box">
+    <label class="muted small">你的代号</label>
+    <input type="text" id="name" maxlength="10" placeholder="比如：小明" autocomplete="off">
+    <div style="height:12px"></div>
+    <button class="gold" id="createBtn" style="width:100%;padding:12px">创建房间</button>
+    <p class="muted small" style="text-align:center;margin:12px 0">—— 或加入朋友的房间 ——</p>
+    <div class="row">
+      <input type="text" id="codeIn" maxlength="4" inputmode="numeric" placeholder="4 位房间号" autocomplete="off">
+      <button id="joinBtn">加入</button>
+    </div>
+    <div class="err" id="homeErr"></div>
+  </div>
+  <p style="text-align:center;margin-top:16px"><button class="ghost" data-rules>查看规则</button></p>
+</div>
+
+<!-- 大厅 -->
+<div class="lobby" id="lobby" hidden>
+  <div class="box">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="font-family:var(--serif);font-size:24px">房间 <span id="lCode" style="font-family:var(--mono);color:var(--gold);letter-spacing:.12em"></span></h2>
+      <span class="sp"></span>
+      <button class="ghost" id="inviteBtn">复制邀请</button>
+      <button class="ghost" data-rules>规则</button>
+      <button class="ghost" id="leaveBtn">离开</button>
+    </div>
+    <p class="muted small" style="margin:6px 0 0">每个人自己选一支队伍。每队 2–4 人，两队都至少 2 人时房主可以开始。</p>
+    <div class="teams" id="teams"></div>
+    <div class="unassigned" id="unassigned"></div>
+    <div class="settings" id="settings"></div>
+    <div class="row"><button class="gold" id="startBtn" style="flex:1;padding:12px"></button></div>
+    <div class="err" id="lobbyErr"></div>
+  </div>
+</div>
+
+<!-- 游戏 -->
+<div class="app" id="game" hidden>
+  <aside class="col left">
+    <div class="top"><h2>密电对决</h2></div>
+    <div class="card"><h3 id="wordsTitle">我方关键词</h3><div class="words" id="myWords"></div>
+      <p class="hint" style="margin:8px 0 0">只有你的队友能看到这 4 个词。</p></div>
+    <div class="card"><h3>比分</h3><div class="score" id="score"></div>
+      <div class="hint" style="margin-top:8px"><div class="legend"><span class="pip w on">✓</span>拦截标记：拿到 2 个获胜</div>
+      <div class="legend"><span class="pip k on">✗</span>失误标记：吃到 2 个失败</div></div></div>
+    <div class="card plist"><h3>玩家</h3><div id="plist"></div></div>
+  </aside>
+
+  <main class="col">
+    <div class="top">
+      <span class="chip">房间 <b id="gCode"></b></span>
+      <span class="chip" id="gRound"></span>
+      <span class="chip" id="gPhase"></span>
+      <span class="chip" id="gTimer" hidden></span>
+      <span class="sp"></span>
+      <button class="ghost" data-rules>规则</button>
+      <button class="ghost" id="abortBtn" hidden>结束本局</button>
+    </div>
+    <div class="card stage" id="stage"></div>
+    <div class="card"><h3>情报记录表 · 每列是同一个关键词历次出现过的提示</h3><div class="sheets" id="sheets"></div></div>
+  </main>
+
+  <aside class="col right">
+    <div class="card chatbox">
+      <h3 id="chatTitle">队内频道</h3>
+      <div class="msgs" id="msgs"></div>
+      <div class="chatin"><input type="text" id="chatIn" maxlength="200" placeholder="只有队友能看到…" autocomplete="off"><button id="chatBtn">发送</button></div>
+    </div>
+  </aside>
+</div>
+
+<div class="mask" id="mask" hidden><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast" hidden></div>
+<div class="conn" id="conn" hidden>连接中断，正在重连…</div>
+
+<script>
+(function(){
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} },
+  del(k){ try{ localStorage.removeItem(k); }catch(e){} }
+};
+const TN = {red:'红队', blue:'蓝队'};
+const OT = t => t==='red'?'blue':'red';
+const tag = t => `<span class="teamtag ${t}">${TN[t]}</span>`;
+
+let sess=null, S=null, es=null, offset=0, draftT=null, lastChat=0, lastPhaseKey='';
+let clueInputs = ['', '', ''];
+
+function toast(t){ const el=$('#toast'); el.textContent=t; el.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>el.hidden=true,2800); }
+async function api(path, body){
+  const r = await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  let j={}; try{ j=await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(j.error||'网络出错，请重试');
+  return j;
+}
+async function act(type, extra){
+  try{ await api('/api/action', Object.assign({code:sess.code,id:sess.id,token:sess.token,type}, extra||{})); return true; }
+  catch(e){ toast(e.message); return false; }
+}
+
+// ---------- 首页 ----------
+$('#name').value = store.get('md_name') || '';
+const urlCode = new URLSearchParams(location.search).get('room');
+if(urlCode){ $('#codeIn').value = urlCode;
+  $('#homeErr').innerHTML = '<span class="muted">如果你是刷新后掉线的玩家，填写原来的代号再点「加入」，就能回到原来的座位。</span>'; }
+function needName(){ const n=$('#name').value.trim(); if(!n){ $('#homeErr').textContent='先写个代号吧'; return null; } store.set('md_name',n); return n; }
+$('#createBtn').onclick = async()=>{ const n=needName(); if(!n) return; try{ enter(await api('/api/create',{name:n})); }catch(e){ $('#homeErr').textContent=e.message; } };
+$('#joinBtn').onclick = async()=>{ const n=needName(); if(!n) return; const code=$('#codeIn').value.trim();
+  if(!/^\d{4}$/.test(code)){ $('#homeErr').textContent='房间号是 4 位数字'; return; }
+  const old=store.get('md_s_'+code)||{};
+  try{ enter(await api('/api/join',{code,name:n,id:old.id,token:old.token})); }catch(e){ $('#homeErr').textContent=e.message; } };
+$('#codeIn').onkeydown = e=>{ if(e.key==='Enter') $('#joinBtn').click(); };
+
+function enter(s){
+  sess=s; store.set('md_s_'+s.code,s); store.set('md_last',s.code);
+  history.replaceState(null,'','?room='+s.code);
+  if(es) es.close();
+  es = new EventSource(`/api/events?code=${s.code}&id=${s.id}&token=${s.token}`);
+  es.onmessage = e=>{ $('#conn').hidden=true; S=JSON.parse(e.data); offset = S.now - Date.now(); render(); };
+  es.onerror = ()=>{ if(es.readyState===EventSource.CLOSED){ store.del('md_s_'+s.code); store.del('md_last'); goHome('房间已失效，请重新创建'); } else $('#conn').hidden=false; };
+}
+function goHome(msg){ if(es) es.close(); es=null; sess=null; S=null; history.replaceState(null,'',location.pathname);
+  $('#home').hidden=false; $('#lobby').hidden=true; $('#game').hidden=true; $('#conn').hidden=true; $('#homeErr').textContent=msg||''; }
+(async()=>{ const code=urlCode||store.get('md_last'); const old=code&&store.get('md_s_'+code); if(!old) return;
+  try{ enter(await api('/api/join',{code,id:old.id,token:old.token,name:store.get('md_name')})); }catch(e){ store.del('md_s_'+code); store.del('md_last'); } })();
+
+$('#leaveBtn').onclick = async()=>{ const s=sess; if(await act('leave')){ store.del('md_s_'+s.code); store.del('md_last'); goHome(); } };
+$('#inviteBtn').onclick = async()=>{ const link=location.origin+location.pathname+'?room='+sess.code;
+  const t=`来玩「密电对决」！打开链接：${link} （房间号 ${sess.code}）`;
+  try{ await navigator.clipboard.writeText(t); toast('已复制，发给朋友吧'); }catch(e){ prompt('复制下面的内容发给朋友：',t); } };
+$('#abortBtn').onclick = ()=>{ if(confirm('确定结束本局，回到大厅吗？')) act('lobby'); };
+
+// ---------- 渲染 ----------
+const P = id => S.players.find(p=>p.id===id) || {name:'?'};
+const pName = id => esc(P(id).name);
+
+function render(){
+  $('#home').hidden = true;
+  const lobby = S.phase==='lobby';
+  $('#lobby').hidden = !lobby; $('#game').hidden = lobby;
+  if(lobby) return renderLobby();
+  renderGame();
+}
+
+function renderLobby(){
+  $('#lCode').textContent = S.code;
+  const host = S.host===S.you, me = P(S.you);
+  const col = t => { const m = S.players.filter(p=>p.team===t);
+    return `<div class="tcol ${t}"><h3>${tag(t)} <span class="muted small">${m.length}/4</span></h3>
+      ${m.map(memHTML).join('') || '<p class="muted small">还没有人</p>'}<span class="sp"></span>
+      ${me.team===t ? `<button class="ghost" data-team="">离开${TN[t]}</button>` : `<button class="${t}b" data-team="${t}" ${m.length>=4?'disabled':''}>加入${TN[t]}</button>`}</div>`; };
+  $('#teams').innerHTML = col('red') + col('blue');
+  const un = S.players.filter(p=>!p.team);
+  $('#unassigned').innerHTML = un.length ? `<span class="muted small">还没选队：</span>${un.map(p=>`<span class="badge" style="margin-right:4px">${esc(p.name)}</span>`).join('')}` : '';
+  document.querySelectorAll('[data-team]').forEach(b=>b.onclick=()=>act('team',{team:b.dataset.team||null}));
+
+  const st = S.settings;
+  $('#settings').innerHTML = `<b>计时</b>
+    <label><input type="checkbox" id="tOn" ${st.timer?'checked':''} ${host?'':'disabled'}> 开启</label>
+    <select id="tSec" ${host&&st.timer?'':'disabled'}>${[30,60,90,120].map(s=>`<option value="${s}" ${st.seconds===s?'selected':''}>${s} 秒</option>`).join('')}</select>
+    <span class="hint">加密和破译阶段都生效：一队先提交后，另一队要在限定时间内完成${host?'':'（由房主设置）'}</span>`;
+  if(host){ const send=()=>act('settings',{timer:$('#tOn').checked, seconds:Number($('#tSec').value)});
+    $('#tOn').onchange=send; $('#tSec').onchange=send; }
+
+  const nr=S.players.filter(p=>p.team==='red').length, nb=S.players.filter(p=>p.team==='blue').length;
+  const b=$('#startBtn');
+  const why = un.length ? `还有 ${un.length} 人没选队` : nr<2||nb<2 ? '每队至少 2 人' : '';
+  b.disabled = !host || !!why;
+  b.textContent = !host ? (why || '等待房主开始…') : why || `开始游戏（红 ${nr} : 蓝 ${nb}）`;
+  b.onclick = ()=>act('start');
+}
+function memHTML(p){
+  return `<div class="mem"><span class="dot ${p.online?'':'off'}"></span><b>${esc(p.name)}</b>${p.id===S.you?'<span class="muted small">（你）</span>':''}${p.id===S.host?'<span class="badge gold">房主</span>':''}</div>`;
+}
+
+function renderGame(){
+  const my=S.myTeam, T=S.teams[my], O=S.teams[OT(my)], enc = T.encoder===S.you;
+  $('#gCode').textContent = S.code;
+  $('#gRound').innerHTML = `第 <b>${S.round}</b> / ${S.maxRounds} 轮`;
+  $('#gPhase').innerHTML = {clue:'<b>加密阶段</b>', guess:`<b>破译：${TN[S.cur]||''}的密码</b>`, reveal:'<b>揭晓</b>', end:'<b>游戏结束</b>'}[S.phase];
+  $('#abortBtn').hidden = S.host!==S.you || S.phase==='end';
+
+  // 关键词
+  $('#wordsTitle').innerHTML = `${tag(my)} 我方关键词`;
+  $('#myWords').innerHTML = T.words.map((w,i)=>`<div class="word ${my}"><div class="no">#${i+1}</div><div class="w">${esc(w)}</div></div>`).join('');
+
+  // 比分
+  const pips = (n,cls,sym) => [0,1].map(i=>`<span class="pip ${cls} ${i<n?'on':''}">${i<n?sym:''}</span>`).join('');
+  $('#score').innerHTML = ['red','blue'].map(t=>{ const k=S.teams[t].tokens;
+    return `<div class="sc ${t}"><div class="hd"><b class="${t}">${TN[t]}</b>${t===my?'<span class="muted small">我方</span>':''}</div>
+    <div class="tk ${k.intercept?'hotw':''}">拦截 ${pips(k.intercept,'w','✓')}<span class="cnt">${k.intercept}/2</span></div>
+    <div class="tk ${k.miss?'hotk':''}">失误 ${pips(k.miss,'k','✗')}<span class="cnt">${k.miss}/2</span></div>
+    <div class="flags">${S.phase!=='end' && k.miss===1 ? '<div class="danger">再失误 1 次就输</div>' : ''}${S.phase!=='end' && k.miss>=2 ? '<div class="danger">已失误 2 次，本轮结束后判定</div>' : ''}${S.phase!=='end' && k.intercept===1 ? '<div class="chance">再拦截 1 次就赢</div>' : ''}${S.phase!=='end' && k.intercept>=2 ? '<div class="chance">已拦截 2 次，本轮结束后判定</div>' : ''}</div></div>`; }).join('');
+
+  // 玩家
+  $('#plist').innerHTML = ['red','blue'].map(t=>`<div style="margin-bottom:6px"><div class="small ${t}" style="font-weight:700">${TN[t]}</div>`+
+    S.players.filter(p=>p.team===t).map(p=>`<div class="mem"><span class="dot ${p.online?'':'off'}"></span>${esc(p.name)}${p.id===S.you?'<span class="muted small">（你）</span>':''}
+      ${S.teams[t].encoder===p.id && S.phase!=='end'?'<span class="badge gold">加密者</span>':''}${S.phase==='reveal'&&p.ready?'<span class="badge">✓</span>':''}</div>`).join('')+'</div>').join('');
+
+  // 阶段
+  const key = S.phase+S.round;
+  if(key!==lastPhaseKey){ lastPhaseKey=key; if(S.phase==='clue') clueInputs = (T.draft||['','','']).slice(); }
+  const stage = $('#stage');
+  if(S.phase==='clue') stage.innerHTML = clueHTML(T,O,enc);
+  else if(S.phase==='guess') stage.innerHTML = guessHTML(T,O,enc);
+  else if(S.phase==='reveal') stage.innerHTML = revealHTML();
+  else stage.innerHTML = endHTML();
+  bindStage(T,enc);
+
+  // 情报表
+  $('#sheets').innerHTML = sheetHTML(my, true) + sheetHTML(OT(my), S.phase==='end');
+
+  renderChat();
+  tick();
+}
+
+function clueHTML(T,O,enc){
+  const other = OT(S.myTeam);
+  const oStatus = `<p class="muted small" style="margin:10px 0 0">${TN[other]}：${O.cluesIn?'已交提示 ✓':`${pName(O.encoder)} 正在写提示…`}</p>`;
+  if(!enc){
+    return `<h3 style="font-size:18px;margin-bottom:6px">加密阶段</h3>
+      <p>本轮我方加密者是 <b>${pName(T.encoder)}</b>${T.cluesIn?'，提示已经交了 ✓':'，正在根据密码写 3 条提示…'}</p>
+      <p class="hint">两队都交完提示后，会逐个处理两队的密码：先处理${TN[S.round%2===1?'red':'blue']}的，再处理${TN[S.round%2===1?'blue':'red']}的。</p>${oStatus}`;
+  }
+  if(T.cluesIn) return `<h3 style="font-size:18px;margin-bottom:6px">提示已提交 ✓</h3><p class="muted">等待对方加密者…</p>${oStatus}`;
+  return `<h3 style="font-size:18px;margin-bottom:4px">你是本轮加密者</h3>
+    <p class="hint" style="margin:0 0 6px">这是只有你能看到的密码。按顺序给每个数字对应的关键词写一条提示：要让队友猜得出，又不能让对手看穿。</p>
+    <div class="code">${T.code.map(d=>`<span>${d}</span>`).join('')}</div>
+    ${T.code.map((d,i)=>`<div class="clueRow"><div class="lbl">第 ${i+1} 条 → #${d}「<b>${esc(T.words[d-1])}</b>」</div>
+      <input type="text" class="clueIn" data-i="${i}" maxlength="20" placeholder="提示 ${i+1}" value="${esc(clueInputs[i]||'')}" autocomplete="off"></div>`).join('')}
+    <div class="row" style="margin-top:10px"><button class="gold" id="sendClues">提交提示</button><span class="sp"></span><span class="timer" id="myTimer"></span></div>
+    <p class="hint" style="margin-top:8px">不能直接写关键词，也不要用谐音、字数、位置之类的暗号，提示要和词义有关。</p>${oStatus}`;
+}
+
+function picker(kind, idx, val, editable, all){
+  const dup = val && all.filter(x=>x===val).length>1;
+  return `<div class="pick ${editable?'':'ro'}">${[1,2,3,4].map(n=>`<button ${editable?`data-pk="${kind}" data-i="${idx}" data-n="${n}"`:'disabled'} class="${val===n?(dup?'dup':'on'):''}">${n}</button>`).join('')}</div>`;
+}
+const fmt = a => a.map(x=>x||'?').join('-');
+// 一个密码的结算卡片（揭晓页和破译中“上一个密码”共用）
+function resultCard(t, r){
+  const o=OT(t);
+  return `<div class="rvc ${t}"><div class="row">${tag(t)}<span class="muted small">加密者 ${pName(r.encoder)}</span></div>
+    ${r.clues.map((c,i)=>`<div class="cl"><b>${r.code[i]}</b><span>${esc(c)}</span></div>`).join('')}
+    <div class="res">密码 <span class="ans">${r.code.join('-')}</span></div>
+    <div class="res">${TN[t]}破译 ${fmt(r.own)} → ${r.ownOk?'<span class="ok">✓ 正确</span>':'<span class="no">✗ 失误标记 +1</span>'}</div>
+    <div class="res">${r.intercept?`${TN[o]}拦截 ${fmt(r.intercept)} → ${r.interceptOk?`<span class="no">拦截成功！${TN[o]}拦截标记 +1</span>`:'<span class="ok">拦截失败</span>'}`:'<span class="muted">第一轮不能拦截</span>'}</div></div>`;
+}
+function guessHTML(T,O,enc){
+  const my=S.myTeam, cur=S.cur, X=S.teams[cur], decoding = my===cur, r1 = S.round<2;
+  const first = S.round%2===1 ? 'red' : 'blue', second = OT(first), step = cur===first ? 1 : 2;
+  const A=T.answers, kind = decoding ? 'own' : 'intercept';
+  const canPlay = decoding ? !enc : !r1;
+  const editable = canPlay && !T.locked;
+  const ed = A.editor && canPlay ? `<span class="hint">最后修改：${pName(A.editor)}</span>` : '';
+  const steps = `<div class="steps">${[first,second].map((t,i)=>`<span class="stp ${t} ${t===cur?'on':''} ${S.roundRec&&S.roundRec[t]?'done':''}">${i+1}. ${TN[t]}的密码${S.roundRec&&S.roundRec[t]?' ✓':''}</span>`).join('<span class="muted">→</span>')}</div>`;
+  const prev = S.roundRec && S.roundRec[OT(cur)] ? `<p class="muted small" style="margin:0 0 6px">上一个密码的结果</p>${resultCard(OT(cur), S.roundRec[OT(cur)])}<div style="height:12px"></div>` : '';
+  const title = decoding
+    ? `${tag(cur)} 破译我方密码 ${enc?'<span class="hint">（你是加密者，这次不能参与）</span>':''}`
+    : `${tag(cur)} ${r1?'对方的提示':'拦截对方密码'}`;
+  const block = `<div class="gblock ${cur}"><h4>${title}</h4>
+    ${!decoding && r1 ? '<p class="hint" style="margin:0 0 6px">第一轮还没有任何线索，不能拦截。先看看对方的提示，记在心里。</p>':''}
+    ${X.clues.map((c,i)=>`<div class="gline"><span class="i">${i+1}</span><span class="c">${esc(c)}</span>${canPlay||decoding?picker(kind,i,A[kind][i],editable,A[kind]):''}</div>`).join('')}
+    ${decoding&&enc?`<p class="hint" style="margin:6px 0 0">正确答案：<span class="ans">${T.code.join('-')}</span>（队友看不到）</p>`:''}
+    ${!decoding&&!r1?'<p class="hint" style="margin:6px 0 0">参考下方对方的情报记录表，猜猜每条提示对应对方的几号词。</p>':''}</div>`;
+  const otherSide = decoding
+    ? (r1 ? '' : `${TN[OT(my)]}拦截：${O.locked?'已锁定 ✓':'讨论中…'}`)
+    : `${TN[cur]}破译：${O.locked?'已锁定 ✓':'讨论中…'}`;
+  let lock;
+  if(!canPlay) lock = `<div class="lockbar"><span class="muted">${decoding?'由队友破译并锁定答案':`等待${TN[cur]}破译…`}</span><span class="sp"></span><span class="muted small">${decoding?otherSide:''}</span></div>`;
+  else if(T.locked) lock = `<div class="lockbar"><span class="ok">✓ 我方已锁定（不能再修改）</span><span class="sp"></span><span class="muted small">${otherSide}</span></div>`;
+  else lock = `<div class="lockbar"><button class="gold" id="lockBtn">锁定答案</button>${ed}<span class="timer" id="myTimer"></span><span class="sp"></span><span class="muted small">${otherSide}</span></div>
+    ${T.deadline?`<p class="warn" style="margin:6px 0 0">对方已经锁定！时间到会自动锁定你们当前的答案，没选完整的部分算猜错。</p>`:''}`;
+  const tip = canPlay ? '<p class="hint" style="margin:8px 0 0">答案全队共享，任何队友都能修改。商量好后由一人锁定，<b>锁定后不能取消</b>。双方都锁定后公布这个密码。</p>' : '';
+  return steps + prev + block + lock + tip;
+}
+
+function revealHTML(){
+  const h = S.history[S.history.length-1];
+  const online = S.players.filter(p=>p.online), ready = online.filter(p=>p.ready).length, me=P(S.you);
+  return `<h3 style="font-size:18px;margin-bottom:8px">第 ${h.round} 轮揭晓</h3><div class="rv">${resultCard(S.myTeam,h[S.myTeam])}${resultCard(OT(S.myTeam),h[OT(S.myTeam)])}</div>
+    <div class="row" style="margin-top:12px"><button class="gold" id="nextBtn" ${me.ready?'disabled':''}>${me.ready?'已准备，等待其他人…':'看完了，进入下一轮'}</button>
+    <span class="muted small">${ready}/${online.length} 人准备</span></div>`;
+}
+
+function endHTML(){
+  const r = S.result, my=S.myTeam;
+  const title = r.winner ? `${TN[r.winner]}获胜！` : '平局';
+  const how = r.how==='normal'
+    ? (()=>{ const w=r.winner, l=OT(w); return S.teams[w].tokens.intercept>=2 ? `${TN[w]}成功拦截了 2 次密码。` : `${TN[l]}失误了 2 次。`; })()
+    : `${r.how==='both'?'两队在同一轮同时达成了胜负条件':'8 轮结束，仍未分出胜负'}，按“拦截数 − 失误数”比分：红队 ${r.score.red}，蓝队 ${r.score.blue}。`;
+  const words = t => `<div class="rvc ${t}"><div class="row">${tag(t)}<span class="muted small">拦截 ${S.teams[t].tokens.intercept} · 失误 ${S.teams[t].tokens.miss}</span></div>
+    <div class="words" style="margin-top:8px">${S.teams[t].words.map((w,i)=>`<div class="word ${t}"><div class="no">#${i+1}</div><div class="w">${esc(w)}</div></div>`).join('')}</div></div>`;
+  const res = r.winner ? (r.winner===my?'<span class="ok">我方胜利</span>':'<span class="no">我方失败</span>') : '';
+  return `<div class="banner ${r.winner||''}">${title}</div><p style="text-align:center;margin:0 0 4px">${res}</p>
+    <p class="muted" style="text-align:center;margin:0 0 12px">${how}</p>
+    <div class="rv">${words(my)}${words(OT(my))}</div>
+    <div class="row" style="margin-top:12px"><span class="sp"></span>${S.host===S.you?'<button class="gold" id="againBtn">回到大厅，再来一局</button>':'<span class="muted small">等待房主开始下一局</span>'}</div>`;
+}
+
+function sheetHTML(t, showWords){
+  const T=S.teams[t];
+  const max = Math.max(1, ...T.sheet.map(c=>c.length));
+  return `<div><div class="row" style="margin-bottom:6px">${tag(t)}<span class="muted small">${t===S.myTeam?'我方':'对方'}</span></div>
+    <table><tr>${[0,1,2,3].map(i=>`<th><span class="n">#${i+1}</span>${showWords&&T.words?`<span class="w">${esc(T.words[i])}</span>`:''}</th>`).join('')}</tr>
+    <tr>${T.sheet.map(c=>`<td>${c.length?c.map(x=>`<div>${esc(x)}</div>`).join(''):'<span class="muted small">—</span>'}</td>`).join('')}</tr></table></div>`;
+}
+
+function bindStage(T,enc){
+  document.querySelectorAll('.clueIn').forEach(el=>{
+    el.oninput = ()=>{ clueInputs[Number(el.dataset.i)] = el.value; clearTimeout(draftT); draftT=setTimeout(()=>act('draft',{clues:clueInputs}),400); };
+    el.onkeydown = e=>{ if(e.key==='Enter' && !e.isComposing){ const nx=document.querySelector(`.clueIn[data-i="${Number(el.dataset.i)+1}"]`); if(nx) nx.focus(); else $('#sendClues').click(); } };
+  });
+  const sc=$('#sendClues'); if(sc) sc.onclick = async()=>{ clearTimeout(draftT); if(await act('clues',{clues:clueInputs})) clueInputs=['','','']; };
+  document.querySelectorAll('[data-pk]').forEach(b=>b.onclick=()=>{
+    const kind=b.dataset.pk, i=Number(b.dataset.i), n=Number(b.dataset.n);
+    const cur = S.teams[S.myTeam].answers[kind].slice(); cur[i] = cur[i]===n ? 0 : n;
+    S.teams[S.myTeam].answers[kind] = cur; S.teams[S.myTeam].answers.editor = S.you; renderGame();
+    act('answer',{kind, digits:cur});
+  });
+  const on=(id,f)=>{ const el=$('#'+id); if(el) el.onclick=f; };
+  on('lockBtn', ()=>{ if(confirm('锁定后不能再修改，确定锁定这个答案吗？')) act('lock'); });
+  on('nextBtn', ()=>act('next'));
+  on('againBtn', ()=>act('lobby'));
+}
+
+// 保持输入框焦点：重绘后恢复正在输入的提示框
+const _render = renderGame;
+renderGame = function(){
+  const a=document.activeElement, i = a && a.classList && a.classList.contains('clueIn') ? a.dataset.i : null, pos = i!=null ? a.selectionStart : 0;
+  _render();
+  if(i!=null){ const el=document.querySelector(`.clueIn[data-i="${i}"]`); if(el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} } }
+};
+
+// ---------- 聊天 ----------
+function renderChat(){
+  $('#chatTitle').innerHTML = `${tag(S.myTeam)} 队内频道 <span class="muted small">只有队友能看到</span>`;
+  const box=$('#msgs'), atBottom = box.scrollHeight-box.scrollTop-box.clientHeight<40;
+  box.innerHTML = S.chat.map(m => m.sys ? `<div class="msg sys">${esc(m.text)}</div>`
+    : `<div class="msg ${m.from===S.you?'me':''}">${m.from===S.you?'':`<div class="who">${esc(m.name)}</div>`}${esc(m.text)}</div>`).join('');
+  const newest = S.chat.length ? S.chat[S.chat.length-1].n : 0;
+  if(atBottom || newest>lastChat && S.chat[S.chat.length-1].from===S.you) box.scrollTop = box.scrollHeight;
+  lastChat = newest;
+}
+async function sendChat(){ const t=$('#chatIn').value.trim(); if(!t) return; $('#chatIn').value=''; await act('chat',{text:t}); const b=$('#msgs'); b.scrollTop=b.scrollHeight; }
+$('#chatBtn').onclick = sendChat;
+$('#chatIn').onkeydown = e=>{ if(e.key==='Enter' && !e.isComposing) sendChat(); };
+
+// ---------- 计时 ----------
+function tick(){
+  const m0=$('#myTimer');
+  if(!S || !['clue','guess'].includes(S.phase) || !S.teams){ $('#gTimer').hidden=true; if(m0) m0.textContent=''; return; }
+  const T=S.teams[S.myTeam];
+  const done = S.phase==='clue' ? T.cluesIn : T.locked;
+  if(!T.deadline || done){ $('#gTimer').hidden=true; if(m0) m0.textContent=''; return; }
+  const left = Math.max(0, Math.ceil((T.deadline - (Date.now()+offset))/1000));
+  $('#gTimer').hidden=false; $('#gTimer').innerHTML = `我方${S.phase==='clue'?'加密':(S.cur===S.myTeam?'破译':'拦截')}剩余 <b class="timer ${left<=10?'urgent':''}" style="font-size:13px">${left} 秒</b>`;
+  const m=$('#myTimer'); if(m){ m.textContent = `剩余 ${left} 秒`; m.classList.toggle('urgent', left<=10); }
+}
+setInterval(tick, 250);
+
+// ---------- 规则 ----------
+function showRules(){
+  $('#modal').innerHTML = `<h2>规则</h2>
+  <p><b>分队：</b>4–8 人，分成红蓝两队，每队 2–4 人。每队有 4 个编号的关键词（#1–#4），只有本队能看到。</p>
+  <p><b>每一轮：</b>两队各有一名<b>加密者</b>（队员轮流担任），拿到一个三位密码，例如 <b>3-1-4</b>。加密者按顺序给 3 号、1 号、4 号关键词各写一条提示。</p>
+  <p><b>破译与拦截：</b>两队的加密者同时写提示。写完后逐个处理两队的密码：处理 A 队的密码时，A 队队员（加密者除外）破译，B 队全员可以猜这个密码来<b>拦截</b>；公布结果后，再反过来处理 B 队的密码。每轮交换先后顺序。第一轮不能拦截。答案<b>锁定后不能取消</b>。</p>
+  <p><b>计分：</b>本队没猜对自己的密码，得一个 <b class="no">✗ 失误标记</b>；猜中对方的密码，得一个 <b class="ok">✓ 拦截标记</b>。拦截失败没有惩罚。</p>
+  <p><b>胜负：</b>先拿到 2 个拦截标记的队获胜；先吃到 2 个失误标记的队失败。如果两队同一轮同时达成，或 8 轮后仍未分出胜负，按“拦截数 − 失误数”比分，相同就是平局。结束时公布两队的关键词。</p>
+  <p><b>情报记录表：</b>每轮揭晓后，提示会自动记在对应关键词的那一列。对方的表看不到关键词，只能靠历次提示推理，这正是拦截的关键。</p>
+  <p><b>提示规则：</b>提示要和词义相关，不能直接写关键词，也不要用谐音、字数、位置、颜色标记之类的暗号。加密者在本队破译时不要在聊天里给队友额外提示。</p>
+  <p><b>计时（可选）：</b>房主开启后，加密和破译两个阶段都有时间限制。一队先交提示，另一队的加密者开始倒计时，时间到没写完的提示记为“（超时）”；处理每个密码时，破译方和拦截方谁先锁定，另一方就开始倒计时，时间到自动锁定当前答案，没选完整的部分算猜错。</p>
+  <p class="muted small">线上讨论请使用右侧的队内频道，避免在语音里被对方听到。</p>
+  <p style="text-align:right;margin:0"><button class="gold" id="closeRules">知道了</button></p>`;
+  $('#mask').hidden=false; $('#closeRules').onclick=()=>$('#mask').hidden=true;
+}
+$('#mask').onclick = e=>{ if(e.target.id==='mask') $('#mask').hidden=true; };
+document.querySelectorAll('[data-rules]').forEach(b=>b.onclick=showRules);
+})();
+</script>
+</body>
+</html>
