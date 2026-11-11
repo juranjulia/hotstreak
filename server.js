@@ -1,209 +1,233 @@
-// 密电对决 —— 4~8 人、两队对抗的解码猜词游戏（零依赖联机服务器）
+// 吉祥物大狂奔 —— 2~8 人联机服务器（零依赖）
 // 运行：node server.js   （默认端口 3000，可用环境变量 PORT 修改）
 'use strict';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const E = require('./engine');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOM_TTL = 6 * 3600 * 1000;
-const MAX_PLAYERS = 8;
-const MAX_ROUNDS = 8;
-const TEAM_MIN = 2, TEAM_MAX = 4;
-const TEAMS = ['red', 'blue'];
-const TNAME = { red: '红队', blue: '蓝队' };
-const other = t => (t === 'red' ? 'blue' : 'red');
-
+const MIN_PLAYERS = 2, MAX_PLAYERS = 8, RACES = 3, START_MONEY = 10;
 const HTML = fs.readFileSync(path.join(__dirname, 'index.html'));
-const WORDS = (() => {
-  const d = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'utf8'));
-  return [...new Set(Object.values(d.categories).flat())];
-})();
 
-// 24 种密码：1~4 中取 3 个不重复的数字排列
-const CODES = [];
-for (let a = 1; a <= 4; a++) for (let b = 1; b <= 4; b++) for (let c = 1; c <= 4; c++)
-  if (a !== b && b !== c && a !== c) CODES.push([a, b, c]);
+// 动画节奏（毫秒）：翻牌 1.5 秒，每个吉祥物的动作 1 秒
+const SPEED = Number(process.env.HS_SPEED) || 1;   // 仅测试用：加快动画
+const T_FLIP = 1500 / SPEED, T_BEAT = 1000 / SPEED, T_BURN = 1500 / SPEED, T_FOLD = 2500 / SPEED, T_END = 2000 / SPEED;
+
+// 赔率：吉祥物票 [第1名, 第2名, 第3名]；附加赌注票 [猜对, 猜错]；第 1 张最先被拿，赔率最高
+const PAY = {
+  m: [
+    { safe: [6, 4, 2], risky: [11, 1, 0] },
+    { safe: [5, 3, 2], risky: [9, 1, 0] },
+    { safe: [4, 3, 1], risky: [7, 1, 0] },
+  ],
+  s: [
+    { safe: [4, 0], risky: [5, -3] },
+    { safe: [3, 0], risky: [4, -3] },
+    { safe: [2, 0], risky: [3, -3] },
+  ],
+};
 
 const rid = () => crypto.randomBytes(8).toString('hex');
-const pick = a => a[crypto.randomInt(a.length)];
-const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-const norm = s => String(s || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}]+/gu, '');
-const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === 3 && a.every((x, i) => x === b[i]);
+const rng = () => crypto.randomInt(4294967296) / 4294967296;
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 class GameError extends Error {}
 const fail = m => { throw new GameError(m); };
 
 const rooms = new Map();
 function newCode() { let c; do { c = String(1000 + crypto.randomInt(9000)); } while (rooms.has(c)); return c; }
 function cleanName(n) { n = String(n || '').trim().slice(0, 10); return n || '玩家'; }
-function newPlayer(name) { return { id: rid(), token: rid(), name: cleanName(name), team: null, ready: false, clients: new Set() }; }
+function newPlayer(name) { return { id: rid(), token: rid(), name: cleanName(name), clients: new Set(), money: START_MONEY, hand: [], ready: false }; }
 
-const members = (room, t) => room.players.filter(p => p.team === t);
+const POOL = E.buildPool();
+const CARD = Object.fromEntries(POOL.map(c => [c.id, c]));
+const cardOut = id => { const c = CARD[id]; return { id, kind: c.kind, m: c.m, n: c.n, dir: c.dir, text: E.cardText(c) }; };
+const sub = room => (room.players.length === 2 ? 2 : 1);           // 每人每场加入牌堆的张数
+const perTickets = room => (room.players.length === 2 ? 3 : 2);    // 每人每场拿几张票
 
-// ---------------- 对局 ----------------
-function newTeamState(words) {
-  return {
-    words, tokens: { intercept: 0, miss: 0 },
-    sheet: [[], [], [], []],          // 1~4 号关键词下历次出现过的提示
-    encoder: null, code: null, clues: null, draft: ['', '', ''], deadline: 0,
-    answers: { own: [0, 0, 0], intercept: [0, 0, 0], editor: null }, locked: false,
-  };
-}
-
+// ---------------- 对局流程 ----------------
 function startGame(room) {
-  const words = shuffle([...WORDS]).slice(0, 8);
-  room.teams = { red: newTeamState(words.slice(0, 4)), blue: newTeamState(words.slice(4, 8)) };
-  room.chat = { red: [], blue: [] };
+  const n = room.players.length;
+  room.players.forEach(p => { p.money = START_MONEY; p.hand = []; p.ready = false; });
+  const starts = POOL.filter(c => c.kind === 'start').map(c => c.id);
+  const rest = shuffle(POOL.filter(c => c.kind !== 'start').map(c => c.id));
+  const randomN = 18 - 4 - n * sub(room);
+  room.pub = starts.concat(rest.splice(0, randomN));
+  const hs = n === 2 ? 4 : 3;
+  room.players.forEach(p => { p.hand = rest.splice(0, hs); });
+  room.sideOrder = shuffle(E.SIDE_BETS.map(b => b.id));
+  room.first = crypto.randomInt(n);
+  room.race = 0;
   room.history = [];
-  room.round = 0;
-  room.result = null;
-  sys(room, 'red', '游戏开始！你们的 4 个关键词在左上方，只有本队能看到。');
-  sys(room, 'blue', '游戏开始！你们的 4 个关键词在左上方，只有本队能看到。');
-  startRound(room);
+  startRace(room);
 }
 
-function startRound(room) {
-  room.round += 1;
-  room.phase = 'clue';
-  for (const t of TEAMS) {
-    const T = room.teams[t], m = members(room, t);
-    T.encoder = m[(room.round - 1) % m.length].id;
-    T.code = pick(CODES);
-    T.clues = null; T.draft = ['', '', '']; T.deadline = 0;
-    T.answers = { own: [0, 0, 0], intercept: [0, 0, 0], editor: null };
-    T.locked = false;
+function startRace(room) {
+  room.race += 1;
+  room.phase = 'bet';
+  room.sideId = room.sideOrder[room.race - 1];
+  room.stacks = { m: [0, 1, 2, 3].map(() => [0, 1, 2]), yes: [0, 1, 2], no: [0, 1, 2] };
+  room.tickets = Object.fromEntries(room.players.map(p => [p.id, []]));
+  room.submitted = {};
+  room.raceData = null; room.result = null;
+  const n = room.players.length, first = (room.first + room.race - 1) % n;
+  room.order = [];
+  for (let r = 0; r < perTickets(room); r++)
+    for (let i = 0; i < n; i++) room.order.push(room.players[(first + (r % 2 ? n - 1 - i : i)) % n].id);
+  room.pos = 0;
+  room.players.forEach(p => { p.ready = false; });
+}
+
+function pickTicket(room, p, a) {
+  if (room.phase !== 'bet') fail('现在不是选票阶段');
+  if (room.order[room.pos] !== p.id) fail('还没轮到你选票');
+  const side = a.side === 'risky' ? 'risky' : 'safe';
+  let t;
+  if (/^m[0-3]$/.test(a.stack)) {
+    const m = Number(a.stack[1]), st = room.stacks.m[m];
+    if (!st.length) fail('这叠票已经被拿完了');
+    t = { type: 'm', m, k: st.shift(), side };
+  } else if (a.stack === 'yes' || a.stack === 'no') {
+    const st = room.stacks[a.stack];
+    if (!st.length) fail('这叠票已经被拿完了');
+    t = { type: 's', yes: a.stack === 'yes', k: st.shift(), side };
+  } else fail('请选择一叠票');
+  t.pay = (t.type === 'm' ? PAY.m : PAY.s)[t.k][side];
+  t.dbl = false;
+  room.tickets[p.id].push(t);
+  room.pos++;
+  if (room.pos >= room.order.length) {
+    room.phase = room.race === RACES ? 'double' : 'submit';
+    room.doubled = {};
   }
-  for (const p of room.players) p.ready = false;
+}
+
+function startRaceRun(room) {
+  const deck = room.pub.concat(...room.players.map(p => room.submitted[p.id]));
+  const { S, timeline } = E.runRace(deck.map(id => CARD[id]), rng);
+  const schedule = buildSchedule(timeline);
+  const total = schedule.length ? schedule[schedule.length - 1].at + schedule[schedule.length - 1].dur + T_END : T_END;
+  room.deck = deck;
+  room.phase = 'race';
+  room.raceData = { startAt: Date.now() + 800 / SPEED, total, schedule };
+  room.raceResult = S;
   clearTimeout(room.timer);
+  room.timer = setTimeout(() => { settle(room); broadcast(room); }, total + 800 / SPEED);
 }
 
-function submitClues(room, t, clues, auto) {
-  const T = room.teams[t];
-  T.clues = clues;
-  T.deadline = 0;
-  const o = room.teams[other(t)];
-  // 计时：一队先交，另一队开始倒计时
-  if (room.settings.timer && !o.clues && !o.deadline) {
-    o.deadline = Date.now() + room.settings.seconds * 1000;
-    clearTimeout(room.timer);
-    room.timer = setTimeout(() => {
-      if (room.phase !== 'clue' || o.clues) return;
-      const bad = x => o.words.some(w => norm(x).includes(norm(w)));
-      submitClues(room, other(t), o.draft.map(x => { x = String(x || '').trim().slice(0, 20); return x && !bad(x) ? x : '（超时）'; }), true);
-      broadcast(room);
-    }, room.settings.seconds * 1000 + 300);
+// 把引擎的时间线拆成“节拍”：翻牌 1.5 秒，然后每个吉祥物的动作各 1 秒
+function buildSchedule(timeline) {
+  const out = [];
+  let t = 0;
+  for (const e of timeline) {
+    if (e.type === 'burn') { out.push({ at: t, dur: T_BURN, kind: 'burn', n: e.cards.length }); t += T_BURN; continue; }
+    if (e.type === 'reshuffle') {
+      out.push({ at: t, dur: T_FOLD, kind: 'fold', steps: e.steps, text: foldText(e.steps) }); t += T_FOLD; continue;
+    }
+    const card = cardOut(e.card);
+    out.push({ at: t, dur: T_FLIP, kind: 'flip', card }); t += T_FLIP;
+    // 按动作者分组成节拍：被撞倒、出局、比赛结束都归到当前动作者的那一拍
+    const beats = [];
+    for (const st of e.steps) {
+      const actor = ['knocked', 'dq', 'over'].includes(st.type) ? null : st.m;
+      let cur = beats[beats.length - 1];
+      if (!cur || (actor != null && cur.actor !== actor && cur.actor != null)) { cur = { kind: 'beat', actor, steps: [] }; beats.push(cur); }
+      if (cur.actor == null && actor != null) cur.actor = actor;
+      cur.steps.push(st);
+    }
+    for (const b of beats) {
+      if (b.steps.every(x => x.type === 'none')) continue;
+      b.steps = b.steps.filter(x => x.type !== 'none');
+      b.at = t; b.dur = T_BEAT; b.text = beatText(b.steps);
+      out.push(b); t += T_BEAT;
+    }
   }
-  if (auto) sys(room, t, '时间到！加密者没写完（或含有关键词）的提示自动记为“（超时）”。');
-  if (room.teams.red.clues && room.teams.blue.clues) {
-    clearTimeout(room.timer);
-    room.phase = 'guess';
-    room.roundRec = { round: room.round };
-    // 每轮交换先后顺序：单数轮先处理红队密码，双数轮先处理蓝队
-    startCode(room, room.round % 2 === 1 ? 'red' : 'blue');
+  return out;
+}
+
+const NAME = m => E.MASCOTS[m].name;
+const REASON = { edge: '冲出了赛道边缘', back: '从后端跑出了赛道', ko: '被击倒出局', fold: '被折叠的赛道淘汰' };
+function beatText(steps) {
+  const parts = [];
+  for (const s of steps) {
+    if (s.type === 'move') parts.push(s.to > E.TRACK.last ? `${NAME(s.m)}冲过终点线` : `${NAME(s.m)}${s.to > s.from ? '前进' : '后退'}到第 ${s.to} 格`);
+    else if (s.type === 'swerve') parts.push(`${NAME(s.m)}转弯到赛道 ${s.to}`);
+    else if (s.type === 'fall') parts.push(`${NAME(s.m)}摔倒了`);
+    else if (s.type === 'knocked') parts.push(`撞倒了${NAME(s.m)}！`);
+    else if (s.type === 'turn') parts.push(`${NAME(s.m)}${s.facing > 0 ? '转回面向终点' : '掉头了'}`);
+    else if (s.type === 'recover') parts.push(`${NAME(s.m)}站了起来`);
+    else if (s.type === 'finish') parts.push(`🏁 ${NAME(s.m)}获得第 ${s.place} 名！`);
+    else if (s.type === 'dq') parts.push(`❌ ${s.ms.map(NAME).join('、')}${REASON[s.reason]}`);
+    else if (s.type === 'over') parts.push('比赛结束！');
   }
+  return parts.join('，');
+}
+function foldText(steps) {
+  const f = steps.find(s => s.type === 'fold');
+  const dq = steps.find(s => s.type === 'dq');
+  return `牌堆用完！重新洗牌，赛道折叠到白线${'①②③'[f.folds - 1] || ''}` + (dq ? `，${dq.ms.map(NAME).join('、')}被淘汰` : '') + (steps.some(s => s.type === 'over') ? '。比赛结束！' : '');
 }
 
-// ---------------- 破译 / 拦截：一次只处理一个队的密码 ----------------
-// 处理 X 队密码时：X 队（加密者除外）破译，Y 队全员拦截（第 1 轮没有拦截）
-function startCode(room, t) {
-  room.cur = t;
-  clearTimeout(room.timer);
-  for (const x of TEAMS) { room.teams[x].locked = false; room.teams[x].deadline = 0; }
-  const msg = room.round >= 2 ? `现在处理${TNAME[t]}的密码：${TNAME[t]}破译，${TNAME[other(t)]}拦截。` : `现在处理${TNAME[t]}的密码：${TNAME[t]}破译（第一轮没有拦截）。`;
-  for (const x of TEAMS) sys(room, x, msg);
+// 比赛动画结束：结算
+function settle(room) {
+  if (room.phase !== 'race') return;
+  const S = room.raceResult;
+  const side = E.SIDE_BETS.find(b => b.id === room.sideId);
+  const happened = side.test(S);
+  const rows = room.players.map(p => {
+    const ts = room.tickets[p.id].map(t => {
+      let v;
+      if (t.type === 'm') { const pl = E.payPlace(S, t.m); v = pl <= 3 ? t.pay[pl - 1] : 0; t.place = pl; }
+      else { t.right = happened === t.yes; v = t.right ? t.pay[0] : t.pay[1]; }
+      t.value = v * (t.dbl ? 2 : 1);
+      return t;
+    });
+    const delta = ts.reduce((s, t) => s + t.value, 0);
+    const before = p.money;
+    p.money = Math.max(0, p.money + delta);
+    return { id: p.id, tickets: ts, delta, before, after: p.money };
+  });
+  const podium = S.podium.map(m => ({ m, status: S.ms[m].status, reason: S.ms[m].dqReason, payPlace: E.payPlace(S, m) }));
+  room.result = { podium, side: { id: side.id, text: side.text, happened }, rows };
+  room.history.push({ race: room.race, podium, side: room.result.side });
+  room.phase = room.race === RACES ? 'end' : 'payout';
+  room.players.forEach(p => { p.ready = false; });
 }
 
-// 锁定即最终提交；一方锁定后另一方开始倒计时，时间到自动锁定当前答案
-function lockTeam(room, t, by) {
-  const T = room.teams[t];
-  T.locked = true;
-  T.deadline = 0;
-  sys(room, t, by ? `${by} 锁定了答案。` : '时间到！已自动锁定当前答案，没选完整的部分算猜错。');
-  const X = room.cur, Y = other(X);
-  const need = room.round >= 2 ? [X, Y] : [X];
-  if (need.every(x => room.teams[x].locked)) { clearTimeout(room.timer); return resolveCode(room); }
-  const waiting = need.find(x => !room.teams[x].locked);
-  const W = room.teams[waiting];
-  if (room.settings.timer && !W.deadline) {
-    W.deadline = Date.now() + room.settings.seconds * 1000;
-    clearTimeout(room.timer);
-    const cur = room.cur, rnd = room.round;
-    room.timer = setTimeout(() => {
-      if (room.phase !== 'guess' || room.cur !== cur || room.round !== rnd || W.locked) return;
-      lockTeam(room, waiting, null);
-      broadcast(room);
-    }, room.settings.seconds * 1000 + 300);
-  }
+function nextRace(room) {
+  // 牌堆洗匀，每人补牌，剩下的作为下一场公开的牌
+  const deck = shuffle(room.deck);
+  room.players.forEach(p => { p.hand.push(...deck.splice(0, sub(room))); });
+  room.pub = deck;
+  startRace(room);
 }
 
-function resolveCode(room) {
-  const t = room.cur, T = room.teams[t], O = room.teams[other(t)];
-  const ownOk = same(T.answers.own, T.code);
-  const icpt = room.round >= 2 ? O.answers.intercept : null;
-  const icptOk = room.round >= 2 && same(icpt, T.code);
-  if (!ownOk) T.tokens.miss++;
-  if (icptOk) O.tokens.intercept++;
-  T.code.forEach((d, i) => T.sheet[d - 1].push(T.clues[i]));
-  room.roundRec[t] = { encoder: T.encoder, clues: T.clues, code: T.code, own: T.answers.own, ownOk, intercept: icpt, interceptOk: icptOk };
-  if (!room.roundRec[other(t)]) return startCode(room, other(t));
-
-  // 两个密码都处理完：本轮揭晓，判定胜负
-  room.history.push(room.roundRec);
-  room.phase = 'reveal';
-  room.cur = null;
-  for (const p of room.players) p.ready = false;
-  const r = room.teams.red, b = room.teams.blue;
-  const redWin = r.tokens.intercept >= 2 || b.tokens.miss >= 2;
-  const blueWin = b.tokens.intercept >= 2 || r.tokens.miss >= 2;
-  if (redWin !== blueWin) return end(room, redWin ? 'red' : 'blue', 'normal');
-  if (redWin || room.round >= MAX_ROUNDS) {
-    const sr = r.tokens.intercept - r.tokens.miss, sb = b.tokens.intercept - b.tokens.miss;
-    return end(room, sr > sb ? 'red' : sb > sr ? 'blue' : null, redWin ? 'both' : 'rounds');
-  }
-}
-
-function end(room, winner, how) {
-  room.phase = 'end';
-  const score = t => room.teams[t].tokens.intercept - room.teams[t].tokens.miss;
-  room.result = { winner, how, score: { red: score('red'), blue: score('blue') } };
-}
-
-function sys(room, t, text) { pushChat(room, t, { sys: true, text }); }
-function pushChat(room, t, msg) {
-  room.chat[t].push({ n: ++room.seq, ...msg });
-  if (room.chat[t].length > 150) room.chat[t].shift();
-}
-
-// ---------------- 状态下发（每人只拿到该看的） ----------------
+// ---------------- 状态下发 ----------------
 function stateFor(room, me) {
-  const ended = room.phase === 'end';
-  const teams = {};
-  if (room.teams) for (const t of TEAMS) {
-    const T = room.teams[t], mine = me.team === t, enc = me.id === T.encoder;
-    teams[t] = {
-      tokens: T.tokens, sheet: T.sheet, encoder: T.encoder,
-      words: mine || ended ? T.words : null,
-      code: (enc && ['clue', 'guess'].includes(room.phase)) || ['reveal', 'end'].includes(room.phase) || (room.phase === 'guess' && room.roundRec[t]) ? T.code : null,
-      cluesIn: !!T.clues,
-      // 提示按顺序公开：正在处理或已经处理过的密码才显示提示
-      clues: ['reveal', 'end'].includes(room.phase) || (room.phase === 'guess' && (room.cur === t || room.roundRec[t])) ? T.clues : null,
-      draft: enc && room.phase === 'clue' ? T.draft : null,
-      deadline: ['clue', 'guess'].includes(room.phase) ? T.deadline : 0,
-      answers: mine ? T.answers : null,
-      locked: T.locked,
-    };
-  }
+  const inGame = room.phase !== 'lobby';
+  const show = ['race', 'payout', 'end'].includes(room.phase);
   return {
-    code: room.code, phase: room.phase, host: room.hostId, you: me.id, myTeam: me.team,
-    settings: room.settings, round: room.round, maxRounds: MAX_ROUNDS, now: Date.now(),
-    cur: room.phase === 'guess' ? room.cur : null,
-    roundRec: room.phase === 'guess' ? room.roundRec : null,
-    players: room.players.map(p => ({ id: p.id, name: p.name, team: p.team, online: p.clients.size > 0, ready: p.ready })),
-    teams: room.teams ? teams : null,
+    code: room.code, phase: room.phase, host: room.hostId, you: me.id, now: Date.now(),
+    mascots: E.MASCOTS, track: E.TRACK, pay: PAY, races: RACES,
+    players: room.players.map(p => ({ id: p.id, name: p.name, online: p.clients.size > 0, money: p.money, ready: p.ready,
+      submitted: !!(room.submitted && room.submitted[p.id]), doubled: !!(room.doubled && room.doubled[p.id] != null),
+      handCount: p.hand.length })),
+    race: inGame ? room.race : 0,
+    side: inGame ? { id: room.sideId, text: E.SIDE_BETS.find(b => b.id === room.sideId).text } : null,
+    stacks: inGame ? room.stacks : null,
+    order: inGame ? room.order : [], pos: inGame ? room.pos : 0,
+    // 拿到的票是公开的；双倍选择在比赛开始后公开
+    tickets: inGame ? Object.fromEntries(Object.entries(room.tickets).map(([id, ts]) =>
+      [id, ts.map(t => ({ ...t, dbl: id === me.id || show ? t.dbl : false }))])) : {},
+    hand: me.hand.map(cardOut),
+    mySubmitted: room.submitted && room.submitted[me.id] ? room.submitted[me.id].map(cardOut) : null,
+    pub: inGame ? room.pub.map(cardOut) : [],
+    perTickets: perTickets(room), sub: sub(room),
+    raceData: show ? room.raceData : null,
+    result: ['payout', 'end'].includes(room.phase) ? room.result : null,
     history: room.history || [],
-    chat: me.team && room.chat ? room.chat[me.team] : [],
-    result: room.result,
   };
 }
 function broadcast(room) {
@@ -215,96 +239,50 @@ function broadcast(room) {
 }
 
 // ---------------- 操作 ----------------
-function digits(a) {
-  if (!Array.isArray(a) || a.length !== 3) fail('答案格式不对');
-  return a.map(x => { const n = Number(x); if (![0, 1, 2, 3, 4].includes(n)) fail('只能选 1~4'); return n; });
-}
-const complete = a => a.every(x => x >= 1) && new Set(a).size === 3;
-
 function act(room, p, a) {
-  const inGame = ['clue', 'guess', 'reveal'].includes(room.phase);
-  const T = p.team && room.teams ? room.teams[p.team] : null;
+  const inGame = room.phase !== 'lobby';
   switch (a.type) {
-    case 'team': {
-      if (room.phase !== 'lobby' && room.phase !== 'end') fail('游戏进行中不能换队');
-      const t = TEAMS.includes(a.team) ? a.team : null;
-      if (t && t !== p.team && members(room, t).length >= TEAM_MAX) fail(`${TNAME[t]}已经满 ${TEAM_MAX} 人了`);
-      p.team = t; return;
-    }
-    case 'settings':
-      if (p.id !== room.hostId) fail('只有房主能修改设置');
-      if (inGame) fail('游戏进行中不能修改设置');
-      room.settings = { timer: !!a.timer, seconds: [30, 60, 90, 120].includes(Number(a.seconds)) ? Number(a.seconds) : 60 };
-      return;
-    case 'start': {
+    case 'start':
       if (p.id !== room.hostId) fail('只有房主能开始游戏');
       if (inGame) fail('游戏已经开始了');
-      const nr = members(room, 'red').length, nb = members(room, 'blue').length;
-      if (room.players.some(x => !x.team)) fail('还有人没有选队');
-      if (nr < TEAM_MIN || nb < TEAM_MIN) fail(`每队至少 ${TEAM_MIN} 人`);
+      if (room.players.length < MIN_PLAYERS) fail(`至少需要 ${MIN_PLAYERS} 人`);
       return startGame(room);
-    }
-    case 'chat': {
-      if (!T || !room.chat) fail('选队并开始游戏后才能使用队内聊天');
-      const text = String(a.text || '').trim().slice(0, 200);
-      if (!text) return;
-      return pushChat(room, p.team, { from: p.id, name: p.name, text });
-    }
-    case 'draft':
-      if (room.phase !== 'clue' || !T || T.encoder !== p.id || T.clues) return;
-      if (Array.isArray(a.clues)) T.draft = [0, 1, 2].map(i => String(a.clues[i] || '').slice(0, 20));
-      return 'quiet';
-    case 'clues': {
-      if (room.phase !== 'clue' || !T || T.encoder !== p.id) fail('现在不是你写提示的时候');
-      if (T.clues) fail('提示已经提交了');
-      const c = [0, 1, 2].map(i => String((a.clues || [])[i] || '').trim().slice(0, 20));
-      if (c.some(x => !x)) fail('三条提示都要写');
-      for (const x of c) for (const w of T.words)
-        if (norm(x).includes(norm(w))) fail(`提示「${x}」包含了关键词「${w}」，换一个吧`);
-      return submitClues(room, p.team, c);
-    }
-    case 'answer': {
-      if (room.phase !== 'guess' || !T) fail('现在不是破译阶段');
-      if (T.locked) fail('你们已经锁定答案了');
-      const decoding = p.team === room.cur;
-      const kind = a.kind === 'intercept' ? 'intercept' : 'own';
-      if (kind === 'own' && !decoding) fail(`现在处理的是${TNAME[room.cur]}的密码，你们这次负责拦截`);
-      if (kind === 'intercept' && decoding) fail('现在轮到你们破译本队密码');
-      if (kind === 'own' && T.encoder === p.id) fail('加密者不能参与本队破译');
-      if (kind === 'intercept' && room.round < 2) fail('第一轮不能拦截');
-      T.answers[kind] = digits(a.digits);
-      T.answers.editor = p.id;
+    case 'pick': return pickTicket(room, p, a);
+    case 'double': {
+      if (room.phase !== 'double') fail('现在不是选双倍的时候');
+      const i = Number(a.index), ts = room.tickets[p.id];
+      if (!(i >= 0 && i < ts.length)) fail('请选择一张票');
+      ts.forEach((t, k) => { t.dbl = k === i; });
+      room.doubled[p.id] = i;
+      if (room.players.every(x => room.doubled[x.id] != null)) room.phase = 'submit';
       return;
     }
-    case 'lock': {
-      if (room.phase !== 'guess' || !T) fail('现在不是破译阶段');
-      if (T.locked) return;
-      if (p.team === room.cur) {
-        if (T.encoder === p.id) fail('请让本队破译者来锁定答案');
-        if (!complete(T.answers.own)) fail('先把三位数选完整（三个数字不能重复）');
-      } else {
-        if (room.round < 2) fail('第一轮不能拦截');
-        if (!complete(T.answers.intercept)) fail('先把拦截的三位数选完整（三个数字不能重复）');
-      }
-      return lockTeam(room, p.team, p.name);
+    case 'submit': {
+      if (room.phase !== 'submit') fail('现在不是出牌阶段');
+      if (room.submitted[p.id]) fail('你已经出过牌了');
+      const ids = Array.isArray(a.cards) ? [...new Set(a.cards)] : [];
+      if (ids.length !== sub(room)) fail(`请选择 ${sub(room)} 张牌`);
+      if (ids.some(id => !p.hand.includes(id))) fail('你没有这张牌');
+      p.hand = p.hand.filter(id => !ids.includes(id));
+      room.submitted[p.id] = ids;
+      if (room.players.every(x => room.submitted[x.id])) startRaceRun(room);
+      return;
     }
-    case 'unlock':
-      fail('锁定后不能取消');
     case 'next': {
-      if (room.phase !== 'reveal') return;
+      if (room.phase !== 'payout') return;
       p.ready = true;
       const online = room.players.filter(x => x.clients.size > 0);
-      if (online.every(x => x.ready)) startRound(room);
+      if (online.every(x => x.ready)) nextRace(room);
       return;
     }
     case 'lobby':
       if (p.id !== room.hostId) fail('只有房主能操作');
       clearTimeout(room.timer);
-      room.phase = 'lobby'; room.teams = null; room.chat = null; room.history = []; room.round = 0; room.result = null;
-      room.players.forEach(x => { x.ready = false; });
+      room.phase = 'lobby';
+      room.players.forEach(x => { x.hand = []; x.ready = false; x.money = START_MONEY; });
       return;
     case 'leave':
-      if (inGame) fail('游戏进行中不能离开，可以请房主结束本局');
+      if (inGame && room.phase !== 'end') fail('游戏进行中不能离开，可以请房主结束本局');
       for (const res of p.clients) res.end();
       room.players = room.players.filter(x => x !== p);
       if (!room.players.length) { rooms.delete(room.code); return 'gone'; }
@@ -359,8 +337,7 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/api/create') {
       const p = newPlayer(b.name);
-      const room = { code: newCode(), hostId: p.id, players: [p], phase: 'lobby', settings: { timer: false, seconds: 60 },
-        teams: null, chat: null, history: [], round: 0, result: null, cur: null, roundRec: null, seq: 0, timer: null, touched: Date.now() };
+      const room = { code: newCode(), hostId: p.id, players: [p], phase: 'lobby', touched: Date.now(), history: [] };
       rooms.set(room.code, room);
       return json(res, 200, { code: room.code, id: p.id, token: p.token });
     }
@@ -369,9 +346,7 @@ const server = http.createServer(async (req, res) => {
       if (!room) return json(res, 404, { error: '房间不存在或已过期' });
       const back = room.players.find(x => x.id === b.id && x.token === b.token);
       if (back) return json(res, 200, { code: room.code, id: back.id, token: back.token });
-      // 用原来的名字找回座位（浏览器丢失了登录信息时），优先匹配掉线的人
-      const nm = cleanName(b.name);
-      const inGame = ['clue', 'guess', 'reveal'].includes(room.phase);
+      const nm = cleanName(b.name), inGame = room.phase !== 'lobby';
       const seat = room.players.find(x => x.name === nm && !x.clients.size) || (inGame && room.players.find(x => x.name === nm));
       if (seat) return json(res, 200, { code: room.code, id: seat.id, token: seat.token });
       if (inGame) {
@@ -390,7 +365,7 @@ const server = http.createServer(async (req, res) => {
       let r;
       try { r = act(a.room, a.p, b); }
       catch (e) { if (e instanceof GameError) return json(res, 400, { error: e.message }); throw e; }
-      if (r !== 'quiet' && r !== 'gone') broadcast(a.room);
+      if (r !== 'gone') broadcast(a.room);
       return json(res, 200, { ok: true });
     }
     res.writeHead(404); res.end();
@@ -406,5 +381,5 @@ setInterval(() => {
     if (!room.players.some(p => p.clients.size) && now - room.touched > ROOM_TTL) { clearTimeout(room.timer); rooms.delete(code); }
 }, 10 * 60 * 1000);
 
-if (require.main === module) server.listen(PORT, () => console.log(`密电对决已启动： http://localhost:${PORT}`));
-module.exports = { server, rooms };
+if (require.main === module) server.listen(PORT, () => console.log(`吉祥物大狂奔已启动： http://localhost:${PORT}`));
+module.exports = { server, rooms, PAY, buildSchedule };
