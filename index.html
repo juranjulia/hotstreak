@@ -125,8 +125,13 @@ button.face:not(:disabled):hover{border-color:var(--c)}
 .order span.done{text-decoration:line-through;opacity:.6}
 .order span.now{background:var(--ink);color:#fff;font-weight:800}
 .turnbox{background:var(--soft);border-radius:12px;padding:12px 14px;min-height:58px;display:flex;align-items:center}
-.flipbtn{font-size:18px;padding:12px 26px;background:var(--c0)}
-.flipbtn:not(:disabled){animation:nudge 1.2s infinite}
+.pilehd{margin:12px 0 6px;font-size:14px}
+.pile{display:flex;flex-wrap:wrap;gap:6px}
+.pile .back{width:44px;height:62px;padding:0;border-radius:7px;border:2px solid #fff;color:#fff;font-family:var(--mono);font-size:13px;font-weight:800;
+  background:repeating-linear-gradient(45deg,#c0392b 0 6px,#a93226 6px 12px);box-shadow:0 2px 0 rgba(0,0,0,.2);opacity:.85}
+.pile .back:disabled{cursor:default;opacity:.55}
+.pile .back.can{opacity:1;cursor:pointer;animation:nudge 1.4s infinite}
+.pile .back.can:hover{transform:translateY(-6px);animation:none;box-shadow:0 0 0 3px var(--gold),0 6px 0 rgba(0,0,0,.2)}
 @keyframes nudge{0%,100%{transform:none}50%{transform:translateY(-2px)}}
 .tk{display:inline-flex;align-items:center;gap:4px;border-radius:8px;padding:2px 7px;font-size:12px;font-weight:700;background:#fff;border:1.5px solid var(--c);margin:2px 4px 2px 0}
 .tk .r{color:var(--bad)} .tk .x2{background:var(--gold);border-radius:4px;padding:0 4px;color:#3b2a05}
@@ -408,8 +413,10 @@ function raceHTML(){
   const seq = S.players.map((_,i)=>S.players[(start+i)%n]);
   return `<h3>🏁 比赛：轮流翻牌</h3>
     <div class="turnbox" id="turnBox"></div>
+    <div class="pilehd"><b>🂠 牌堆</b> <span id="pileInfo" class="muted"></span></div>
+    <div class="pile" id="pileBox"></div>
     <div class="order" style="margin-top:8px">${seq.map(p=>`<span data-turn="${p.id}">${esc(p.name)}</span>`).join('')}</div>
-    <p class="small muted" style="margin:8px 0 0">从本场选票先手的玩家开始，按顺序每人翻一张，翻开后程序自动移动吉祥物。轮到的人 20 秒内没翻，程序会自动替他翻。开场弃牌和牌堆用完后的洗牌由程序完成。</p>${sideLine()}`;
+    <p class="small muted" style="margin:8px 0 0">从本场选票先手的玩家开始，按顺序每人翻一张：点牌堆里任意一张（或点「随便翻一张」），程序自动移动吉祥物。轮到的人 20 秒内没翻，程序会随机替他翻。开场弃牌和牌堆用完后的洗牌由程序完成。</p>${sideLine()}`;
 }
 function updateTurnUI(){
   const box=$('#turnBox'); if(!box || !S || S.phase!=='race' || !S.raceData) return;
@@ -422,14 +429,32 @@ function updateTurnUI(){
     box.dataset.key=key;
     if(RD.over) box.innerHTML = '<b>🏁 比赛结束，动画播完后结算…</b>';
     else if(mine){
-      box.innerHTML = `<div class="row" style="flex-wrap:wrap"><button class="main flipbtn" id="flipBtn">🃏 翻牌！</button><span class="muted" id="turnInfo"></span></div>`;
-      $('#flipBtn').onclick = ()=>{ const b=$('#flipBtn'); b.disabled=true; b.dataset.sent='1'; act('flip').then(ok=>{ if(!ok){ delete b.dataset.sent; b.disabled=false; } }); };
+      box.innerHTML = `<div class="row" style="flex-wrap:wrap"><b style="font-size:16px">👉 轮到你了，从下面的牌堆里挑一张翻开</b><button class="ghost" id="flipBtn">🎲 随便翻一张</button><span class="muted" id="turnInfo"></span></div>`;
+      $('#flipBtn').onclick = ()=>doFlip(null);
     } else box.innerHTML = `<p style="margin:0">轮到 <b>${esc(P(RD.turn).name)}</b> 翻牌 <span class="muted" id="turnInfo"></span></p>`;
   }
   if(RD.over) return;
   const wait = RD.readyAt>now, left = Math.max(0, Math.ceil((RD.autoAt-now)/1000));
-  const info=$('#turnInfo'); if(info) info.textContent = wait ? '（等上一张的动画播完）' : (mine ? `轮到你了，${left} 秒后自动翻` : `（${left} 秒后自动翻）`);
-  const b=$('#flipBtn'); if(b && !b.dataset.sent){ b.disabled = wait; b.textContent = wait ? '🃏 等动画播完…' : '🃏 翻牌！'; }
+  const info=$('#turnInfo'); if(info) info.textContent = wait ? '（等上一张的动画播完）' : (mine ? `${left} 秒后随机自动翻` : `（${left} 秒后自动翻）`);
+  const b=$('#flipBtn'); if(b && !flipSent){ b.disabled = wait; }
+  // 牌堆：剩几张就画几张背面，轮到自己时可以点
+  const pb=$('#pileBox'), can = mine && !wait && !flipSent && !RD.over;
+  const pk = RD.left+'|'+can+'|'+RD.pass;
+  if(pb && pb.dataset.key!==pk){
+    pb.dataset.key=pk;
+    pb.innerHTML = Array.from({length:RD.left},(_,i)=>`<button class="back ${can?'can':''}" ${can?`data-pos="${i+1}"`:'disabled'} title="第 ${i+1} 张">${i+1}</button>`).join('') || '<span class="muted small">牌堆翻完了，正在洗牌…</span>';
+    pb.querySelectorAll('[data-pos]').forEach(el=>el.onclick=()=>doFlip(Number(el.dataset.pos)));
+  }
+  const pi=$('#pileInfo'); if(pi) pi.textContent = `还剩 ${RD.left} 张${RD.pass>1?`（已经洗过 ${RD.pass-1} 次牌）`:''}`;
+}
+let flipSent = false;
+async function doFlip(pos){
+  if(flipSent) return; flipSent = true;
+  document.querySelectorAll('#pileBox .back, #flipBtn').forEach(el=>el.disabled=true);
+  const ok = await act('flip', pos==null ? {} : {pos});
+  flipSent = false;
+  const pb=$('#pileBox'); if(pb) pb.dataset.key='';     // 失败时恢复可点
+  if(!ok) updateTurnUI();
 }
 
 function sideLine(){ return S.side ? `<p style="margin:10px 0 0">🎲 本场附加赌注：<b>${esc(S.side.text)}</b></p>` : ''; }
@@ -545,7 +570,7 @@ class RacePlayer {
   apply(item){
     const ms=this.ms;
     if(item.kind==='burn'){ this.cur={burn:item.n, k:++this.seq}; this.log(`弃掉 ${item.n} 张牌（不公开）`); return; }
-    if(item.kind==='flip'){ this.cur={card:item.card, k:++this.seq, by:item.by}; this.log(`${item.by?item.by+' ':''}翻开：${item.card.text}`, true); return; }
+    if(item.kind==='flip'){ this.cur={card:item.card, k:++this.seq, by:item.by, pos:item.pos}; this.log(`${item.by?item.by+' ':''}翻开${item.pos?`第 ${item.pos} 张`:''}：${item.card.text}`, true); return; }
     this.act = item.actor;
     for(const s of item.steps||[]){
       const x = s.m!=null ? ms[s.m] : null;
@@ -605,7 +630,7 @@ class RacePlayer {
     const f=$('#flip');
     const fkey = this.cur ? 'k'+this.cur.k : (this.data ? 'wait' : 'idle');
     if(fkey===this.fkey){ /* 同一张牌，不重播翻牌动画 */ }
-    else if((this.fkey=fkey) && this.cur && this.cur.card){ const c=this.cur.card; f.innerHTML=`<div><div class="lbl">${this.cur.by?esc(this.cur.by)+' 翻开':'刚翻开'}</div><div class="bigcard ${mcls(c.m)}"><span class="e">${cardEmo(c)}</span><span class="t">${esc(c.m==null?'':MN[c.m])} ${esc(cardLabel(c))}</span></div></div>`; }
+    else if((this.fkey=fkey) && this.cur && this.cur.card){ const c=this.cur.card; f.innerHTML=`<div><div class="lbl">${this.cur.by?esc(this.cur.by)+' 翻开':'刚翻开'}${this.cur.pos?` 第 ${this.cur.pos} 张`:''}</div><div class="bigcard ${mcls(c.m)}"><span class="e">${cardEmo(c)}</span><span class="t">${esc(c.m==null?'':MN[c.m])} ${esc(cardLabel(c))}</span></div></div>`; }
     else if(this.cur && this.cur.burn) f.innerHTML=`<div><div class="lbl">倒数 3、2、1…</div><div style="font-size:30px">🂠🂠🂠</div><div class="small muted">弃掉 3 张</div></div>`;
     else if(this.cur && this.cur.fold) f.innerHTML=`<div><div style="font-size:30px">🔄</div><b>牌堆用完，赛道折叠！</b></div>`;
     else if(this.data) f.innerHTML='<span class="muted">准备开跑…</span>';

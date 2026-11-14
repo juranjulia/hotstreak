@@ -105,87 +105,74 @@ function pickTicket(room, p, a) {
   }
 }
 
-// ---------------- 比赛：玩家轮流翻牌 ----------------
-// 比赛结果在牌堆洗好时就已确定（引擎一次算完），但只按翻牌进度逐张公开：
-// 每翻一张，把这张牌和它引起的吉祥物动作加进公开的时间表。开场弃牌、牌堆用完时的洗牌折叠由程序自动进行。
+// ---------------- 比赛：玩家轮流翻牌，自己挑第几张 ----------------
+// 牌堆洗好后背面朝上排成一排，轮到的人挑一张翻开，引擎当场结算这张牌。
+// 开场弃 3 张、牌堆用完时的洗牌折叠由程序自动进行。还没翻开的牌不会发给任何浏览器。
 function startRaceRun(room) {
-  const deck = room.pub.concat(...room.players.map(p => room.submitted[p.id]));
-  const { S, timeline } = E.runRace(deck.map(id => CARD[id]), rng);
-  room.deck = deck;
+  room.deck = room.pub.concat(...room.players.map(p => room.submitted[p.id]));
   room.phase = 'race';
-  room.raceResult = S;
-  room.units = toUnits(buildSchedule(timeline));
-  room.unitPos = 0;
+  room.raceResult = E.newRace();
   room.lastEnd = Date.now() + 800 / SPEED;
-  const n = room.players.length;
-  room.flipIdx = (room.first + room.race - 1) % n;       // 本场选票先手的人先翻
-  room.raceData = { id: rid(), items: [], turn: null, readyAt: 0, autoAt: 0, over: false, flips: 0 };
-  playAutos(room);
+  room.flipIdx = (room.first + room.race - 1) % room.players.length;   // 本场选票先手的人先翻
+  room.raceData = { id: rid(), items: [], turn: null, readyAt: 0, autoAt: 0, over: false, flips: 0, left: 0, pass: 0 };
+  startPass(room);
   nextTurn(room, false);
 }
 
-// 把时间表切成“单元”：每张翻开的牌（连同它引起的动作）是一个单元，由玩家触发；弃牌 / 洗牌折叠是自动单元
-function toUnits(schedule) {
-  const units = [];
-  for (const it of schedule) {
-    const auto = it.kind === 'burn' || it.kind === 'fold';
-    if (it.kind === 'flip' || auto) {
-      const last = units[units.length - 1];
-      if (auto && last && last.auto) last.items.push(it); else units.push({ auto, items: [it] });
-    } else units[units.length - 1].items.push(it);
-  }
-  for (const u of units) {
-    const t0 = u.items[0].at;
-    u.items.forEach(it => { it.rel = it.at - t0; });
-    const lastIt = u.items[u.items.length - 1];
-    u.dur = lastIt.at + lastIt.dur - t0;
-  }
-  return units;
+// 洗牌 → 弃掉 3 张 → 剩下的背面朝上等着翻
+function startPass(room) {
+  const pile = shuffle(room.deck);
+  const burned = pile.splice(0, E.BURN);
+  room.pile = pile;
+  room.raceData.pass++;
+  queue(room, [{ type: 'burn', cards: burned }], null);
 }
 
-// 把一个单元排进公开时间表（接在上一段动画后面），返回它的结束时间
-function playUnit(room, by) {
-  const u = room.units[room.unitPos++];
-  const start = Math.max(Date.now(), room.lastEnd);
-  for (const it of u.items) {
-    const out = { ...it, at: start + it.rel };
-    delete out.rel;
-    if (out.kind === 'flip') out.by = by;
-    room.raceData.items.push(out);
-  }
-  room.lastEnd = start + u.dur;
-}
-function playAutos(room) {
-  while (room.unitPos < room.units.length && room.units[room.unitPos].auto) playUnit(room, null);
+// 把一段引擎结果变成动画，接在上一段动画后面公开
+function queue(room, timeline, by) {
+  const items = buildSchedule(timeline);
+  if (!items.length) return;
+  const start = Math.max(Date.now(), room.lastEnd), t0 = items[0].at;
+  for (const it of items) room.raceData.items.push({ ...it, at: start + it.at - t0, ...(it.kind === 'flip' ? { by } : {}) });
+  const last = items[items.length - 1];
+  room.lastEnd = start + last.at + last.dur - t0;
 }
 
 function nextTurn(room, advance) {
   clearTimeout(room.timer);
-  const RD = room.raceData;
-  if (room.unitPos >= room.units.length) {
+  const RD = room.raceData, S = room.raceResult;
+  RD.left = room.pile.length;
+  if (S.over) {
     // 比赛结束：动画播完后结算
     RD.over = true; RD.turn = null;
     room.timer = setTimeout(() => { settle(room); broadcast(room); }, room.lastEnd - Date.now() + T_END);
     return;
   }
-  const n = room.players.length;
-  if (advance) room.flipIdx = (room.flipIdx + 1) % n;
+  if (advance) room.flipIdx = (room.flipIdx + 1) % room.players.length;
   RD.turn = room.players[room.flipIdx].id;
   RD.readyAt = room.lastEnd;                 // 上一张的动画播完后才能翻
   RD.autoAt = room.lastEnd + T_AUTO;
   const race = room.race;
   room.timer = setTimeout(() => {
     if (room.phase !== 'race' || room.race !== race || RD.turn == null) return;
-    flip(room, null);
+    flip(room, null, null);
     broadcast(room);
   }, RD.autoAt - Date.now());
 }
 
-function flip(room, p) {
-  const RD = room.raceData;
-  playUnit(room, p ? p.name : `自动（替${room.players[room.flipIdx].name}）`);
+// 翻开第 pos 张（从 0 数起）；没指定就随机挑一张
+function flip(room, p, pos) {
+  const RD = room.raceData, S = room.raceResult;
+  if (!(Number.isInteger(pos) && pos >= 0 && pos < room.pile.length)) pos = crypto.randomInt(room.pile.length);
+  const id = room.pile.splice(pos, 1)[0];
+  const who = p ? p.name : `自动（替${room.players[room.flipIdx].name}）`;
+  queue(room, [{ type: 'card', card: id, steps: E.applyCard(S, CARD[id]), pos: pos + 1 }], who);
   RD.flips++;
-  playAutos(room);
+  // 牌堆翻完还没结束：洗牌、折叠赛道、再弃 3 张
+  if (!S.over && !room.pile.length) {
+    queue(room, [{ type: 'reshuffle', steps: E.fold(S) }], null);
+    if (!S.over) startPass(room);
+  }
   nextTurn(room, true);
 }
 
@@ -199,7 +186,7 @@ function buildSchedule(timeline) {
       out.push({ at: t, dur: T_FOLD, kind: 'fold', steps: e.steps, text: foldText(e.steps) }); t += T_FOLD; continue;
     }
     const card = cardOut(e.card);
-    out.push({ at: t, dur: T_FLIP, kind: 'flip', card }); t += T_FLIP;
+    out.push({ at: t, dur: T_FLIP, kind: 'flip', card, pos: e.pos }); t += T_FLIP;
     // 按动作者分组成节拍：被撞倒、出局、比赛结束都归到当前动作者的那一拍
     const beats = [];
     for (const st of e.steps) {
@@ -346,7 +333,9 @@ function act(room, p, a) {
       if (RD.over || RD.turn == null) fail('比赛已经结束了');
       if (RD.turn !== p.id) fail('还没轮到你翻牌');
       if (Date.now() < RD.readyAt - 250 / SPEED) fail('等上一张牌的动画播完再翻');
-      return flip(room, p);
+      const pos = a.pos == null ? null : Number(a.pos) - 1;      // 网页上从 1 数起
+      if (pos != null && !(Number.isInteger(pos) && pos >= 0 && pos < room.pile.length)) fail(`请选第 1 到第 ${room.pile.length} 张`);
+      return flip(room, p, pos);
     }
     case 'next': {
       if (room.phase !== 'payout') return;
@@ -462,4 +451,4 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 if (require.main === module) server.listen(PORT, () => console.log(`吉祥物大狂奔已启动： http://localhost:${PORT}`));
-module.exports = { server, rooms, PAY, buildSchedule, toUnits };
+module.exports = { server, rooms, PAY, buildSchedule };
