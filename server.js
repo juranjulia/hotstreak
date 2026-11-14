@@ -15,6 +15,7 @@ const HTML = fs.readFileSync(path.join(__dirname, 'index.html'));
 // 动画节奏（毫秒）：翻牌 1.5 秒，每个吉祥物的动作 1 秒
 const SPEED = Number(process.env.HS_SPEED) || 1;   // 仅测试用：加快动画
 const T_FLIP = 1500 / SPEED, T_BEAT = 1000 / SPEED, T_BURN = 1500 / SPEED, T_FOLD = 2500 / SPEED, T_END = 2000 / SPEED;
+const T_AUTO = 20000 / SPEED;      // 轮到的人 20 秒没翻牌，程序自动替他翻
 
 // 赔率：吉祥物票 [第1名, 第2名, 第3名]；附加赌注票 [猜对, 猜错]；第 1 张最先被拿，赔率最高
 const PAY = {
@@ -104,17 +105,88 @@ function pickTicket(room, p, a) {
   }
 }
 
+// ---------------- 比赛：玩家轮流翻牌 ----------------
+// 比赛结果在牌堆洗好时就已确定（引擎一次算完），但只按翻牌进度逐张公开：
+// 每翻一张，把这张牌和它引起的吉祥物动作加进公开的时间表。开场弃牌、牌堆用完时的洗牌折叠由程序自动进行。
 function startRaceRun(room) {
   const deck = room.pub.concat(...room.players.map(p => room.submitted[p.id]));
   const { S, timeline } = E.runRace(deck.map(id => CARD[id]), rng);
-  const schedule = buildSchedule(timeline);
-  const total = schedule.length ? schedule[schedule.length - 1].at + schedule[schedule.length - 1].dur + T_END : T_END;
   room.deck = deck;
   room.phase = 'race';
-  room.raceData = { startAt: Date.now() + 800 / SPEED, total, schedule };
   room.raceResult = S;
+  room.units = toUnits(buildSchedule(timeline));
+  room.unitPos = 0;
+  room.lastEnd = Date.now() + 800 / SPEED;
+  const n = room.players.length;
+  room.flipIdx = (room.first + room.race - 1) % n;       // 本场选票先手的人先翻
+  room.raceData = { id: rid(), items: [], turn: null, readyAt: 0, autoAt: 0, over: false, flips: 0 };
+  playAutos(room);
+  nextTurn(room, false);
+}
+
+// 把时间表切成“单元”：每张翻开的牌（连同它引起的动作）是一个单元，由玩家触发；弃牌 / 洗牌折叠是自动单元
+function toUnits(schedule) {
+  const units = [];
+  for (const it of schedule) {
+    const auto = it.kind === 'burn' || it.kind === 'fold';
+    if (it.kind === 'flip' || auto) {
+      const last = units[units.length - 1];
+      if (auto && last && last.auto) last.items.push(it); else units.push({ auto, items: [it] });
+    } else units[units.length - 1].items.push(it);
+  }
+  for (const u of units) {
+    const t0 = u.items[0].at;
+    u.items.forEach(it => { it.rel = it.at - t0; });
+    const lastIt = u.items[u.items.length - 1];
+    u.dur = lastIt.at + lastIt.dur - t0;
+  }
+  return units;
+}
+
+// 把一个单元排进公开时间表（接在上一段动画后面），返回它的结束时间
+function playUnit(room, by) {
+  const u = room.units[room.unitPos++];
+  const start = Math.max(Date.now(), room.lastEnd);
+  for (const it of u.items) {
+    const out = { ...it, at: start + it.rel };
+    delete out.rel;
+    if (out.kind === 'flip') out.by = by;
+    room.raceData.items.push(out);
+  }
+  room.lastEnd = start + u.dur;
+}
+function playAutos(room) {
+  while (room.unitPos < room.units.length && room.units[room.unitPos].auto) playUnit(room, null);
+}
+
+function nextTurn(room, advance) {
   clearTimeout(room.timer);
-  room.timer = setTimeout(() => { settle(room); broadcast(room); }, total + 800 / SPEED);
+  const RD = room.raceData;
+  if (room.unitPos >= room.units.length) {
+    // 比赛结束：动画播完后结算
+    RD.over = true; RD.turn = null;
+    room.timer = setTimeout(() => { settle(room); broadcast(room); }, room.lastEnd - Date.now() + T_END);
+    return;
+  }
+  const n = room.players.length;
+  if (advance) room.flipIdx = (room.flipIdx + 1) % n;
+  RD.turn = room.players[room.flipIdx].id;
+  RD.readyAt = room.lastEnd;                 // 上一张的动画播完后才能翻
+  RD.autoAt = room.lastEnd + T_AUTO;
+  const race = room.race;
+  room.timer = setTimeout(() => {
+    if (room.phase !== 'race' || room.race !== race || RD.turn == null) return;
+    flip(room, null);
+    broadcast(room);
+  }, RD.autoAt - Date.now());
+}
+
+function flip(room, p) {
+  const RD = room.raceData;
+  playUnit(room, p ? p.name : `自动（替${room.players[room.flipIdx].name}）`);
+  RD.flips++;
+  playAutos(room);
+  nextTurn(room, true);
 }
 
 // 把引擎的时间线拆成“节拍”：翻牌 1.5 秒，然后每个吉祥物的动作各 1 秒
@@ -268,6 +340,14 @@ function act(room, p, a) {
       if (room.players.every(x => room.submitted[x.id])) startRaceRun(room);
       return;
     }
+    case 'flip': {
+      if (room.phase !== 'race') fail('现在不是比赛阶段');
+      const RD = room.raceData;
+      if (RD.over || RD.turn == null) fail('比赛已经结束了');
+      if (RD.turn !== p.id) fail('还没轮到你翻牌');
+      if (Date.now() < RD.readyAt - 250 / SPEED) fail('等上一张牌的动画播完再翻');
+      return flip(room, p);
+    }
     case 'next': {
       if (room.phase !== 'payout') return;
       p.ready = true;
@@ -382,4 +462,4 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 if (require.main === module) server.listen(PORT, () => console.log(`吉祥物大狂奔已启动： http://localhost:${PORT}`));
-module.exports = { server, rooms, PAY, buildSchedule };
+module.exports = { server, rooms, PAY, buildSchedule, toUnits };

@@ -124,6 +124,10 @@ button.face:not(:disabled):hover{border-color:var(--c)}
 .order span{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--soft);color:var(--muted)}
 .order span.done{text-decoration:line-through;opacity:.6}
 .order span.now{background:var(--ink);color:#fff;font-weight:800}
+.turnbox{background:var(--soft);border-radius:12px;padding:12px 14px;min-height:58px;display:flex;align-items:center}
+.flipbtn{font-size:18px;padding:12px 26px;background:var(--c0)}
+.flipbtn:not(:disabled){animation:nudge 1.2s infinite}
+@keyframes nudge{0%,100%{transform:none}50%{transform:translateY(-2px)}}
 .tk{display:inline-flex;align-items:center;gap:4px;border-radius:8px;padding:2px 7px;font-size:12px;font-weight:700;background:#fff;border:1.5px solid var(--c);margin:2px 4px 2px 0}
 .tk .r{color:var(--bad)} .tk .x2{background:var(--gold);border-radius:4px;padding:0 4px;color:#3b2a05}
 
@@ -361,8 +365,8 @@ function renderGame(){
 
   // 赛道：比赛 / 结算阶段由播放器控制，其他阶段显示起跑状态
   if(['race','payout','end'].includes(S.phase) && S.raceData){
-    if(!player || player.startAt!==S.raceData.startAt) player = new RacePlayer(S.raceData, S.phase!=='race');
-    else if(S.phase!=='race') player.finishNow();
+    if(!player || player.startAt!==S.raceData.id) player = new RacePlayer(S.raceData, S.phase!=='race');
+    else { player.data = S.raceData; if(S.phase!=='race') player.finishNow(); }
   } else if(!player || player.startAt!=='idle'){ player = new RacePlayer(null); }
 
   // 玩家列表
@@ -391,9 +395,41 @@ function renderGame(){
   if(S.phase==='bet') st.innerHTML = betHTML(cur);
   else if(S.phase==='double') st.innerHTML = doubleHTML();
   else if(S.phase==='submit') st.innerHTML = submitHTML();
-  else if(S.phase==='race') st.innerHTML = `<h3>🏁 比赛进行中</h3><p class="muted" style="margin:0">所有人看到的是同一场比赛。每张牌翻开后，相关的吉祥物依次移动。<button class="ghost" id="skipBtn" style="margin-left:8px">跳过动画</button></p>${sideLine()}`;
+  else if(S.phase==='race') st.innerHTML = raceHTML();
   else if(S.phase==='payout' || S.phase==='end') st.innerHTML = payoutHTML();
   bindStage();
+}
+
+// 比赛阶段：轮流翻牌
+function raceHTML(){
+  const RD=S.raceData, n=S.players.length;
+  const first = S.order && S.order.length ? S.order[0] : null;
+  const start = Math.max(0, S.players.findIndex(p=>p.id===first));
+  const seq = S.players.map((_,i)=>S.players[(start+i)%n]);
+  return `<h3>🏁 比赛：轮流翻牌</h3>
+    <div class="turnbox" id="turnBox"></div>
+    <div class="order" style="margin-top:8px">${seq.map(p=>`<span data-turn="${p.id}">${esc(p.name)}</span>`).join('')}</div>
+    <p class="small muted" style="margin:8px 0 0">从本场选票先手的玩家开始，按顺序每人翻一张，翻开后程序自动移动吉祥物。轮到的人 20 秒内没翻，程序会自动替他翻。开场弃牌和牌堆用完后的洗牌由程序完成。</p>${sideLine()}`;
+}
+function updateTurnUI(){
+  const box=$('#turnBox'); if(!box || !S || S.phase!=='race' || !S.raceData) return;
+  const RD=S.raceData, now=Date.now()+offset;
+  document.querySelectorAll('[data-turn]').forEach(el=>el.className = el.dataset.turn===RD.turn ? 'now' : '');
+  const mine = RD.turn===S.you;
+  // 只在换人时重画；倒计时和按钮状态原地更新，避免点击时按钮被替换
+  const key = RD.over ? 'over' : RD.turn+'|'+mine+'|'+RD.flips;
+  if(box.dataset.key!==key){
+    box.dataset.key=key;
+    if(RD.over) box.innerHTML = '<b>🏁 比赛结束，动画播完后结算…</b>';
+    else if(mine){
+      box.innerHTML = `<div class="row" style="flex-wrap:wrap"><button class="main flipbtn" id="flipBtn">🃏 翻牌！</button><span class="muted" id="turnInfo"></span></div>`;
+      $('#flipBtn').onclick = ()=>{ const b=$('#flipBtn'); b.disabled=true; b.dataset.sent='1'; act('flip').then(ok=>{ if(!ok){ delete b.dataset.sent; b.disabled=false; } }); };
+    } else box.innerHTML = `<p style="margin:0">轮到 <b>${esc(P(RD.turn).name)}</b> 翻牌 <span class="muted" id="turnInfo"></span></p>`;
+  }
+  if(RD.over) return;
+  const wait = RD.readyAt>now, left = Math.max(0, Math.ceil((RD.autoAt-now)/1000));
+  const info=$('#turnInfo'); if(info) info.textContent = wait ? '（等上一张的动画播完）' : (mine ? `轮到你了，${left} 秒后自动翻` : `（${left} 秒后自动翻）`);
+  const b=$('#flipBtn'); if(b && !b.dataset.sent){ b.disabled = wait; b.textContent = wait ? '🃏 等动画播完…' : '🃏 翻牌！'; }
 }
 
 function sideLine(){ return S.side ? `<p style="margin:10px 0 0">🎲 本场附加赌注：<b>${esc(S.side.text)}</b></p>` : ''; }
@@ -471,7 +507,7 @@ function bindStage(){
   on('subBtn', async()=>{ if(await act('submit',{cards:sel})) sel=[]; });
   on('nextBtn', ()=>act('next'));
   on('againBtn', ()=>act('lobby'));
-  on('skipBtn', ()=>{ if(player) player.finishNow(); });
+  on('flipBtn', ()=>act('flip'));
 }
 
 // ---------- 赛道与比赛播放器 ----------
@@ -498,7 +534,7 @@ function buildTrack(){
 
 class RacePlayer {
   constructor(data, instant){
-    this.data=data; this.startAt = data ? data.startAt : 'idle';
+    this.data=data; this.startAt = data ? data.id : 'idle';
     this.ms = [0,1,2,3].map(i=>({lane:i+1,row:0,facing:1,fallen:false,status:'run',place:null,reason:null}));
     this.podium=[null,null,null,null]; this.boundary=S.track.back; this.idx=0; this.logs=[]; this.cur=null; this.act=null; this.seq=0; this.fkey=null;
     buildTrack();
@@ -509,7 +545,7 @@ class RacePlayer {
   apply(item){
     const ms=this.ms;
     if(item.kind==='burn'){ this.cur={burn:item.n, k:++this.seq}; this.log(`弃掉 ${item.n} 张牌（不公开）`); return; }
-    if(item.kind==='flip'){ this.cur={card:item.card, k:++this.seq}; this.log(`翻开：${item.card.text}`, true); return; }
+    if(item.kind==='flip'){ this.cur={card:item.card, k:++this.seq, by:item.by}; this.log(`${item.by?item.by+' ':''}翻开：${item.card.text}`, true); return; }
     this.act = item.actor;
     for(const s of item.steps||[]){
       const x = s.m!=null ? ms[s.m] : null;
@@ -530,13 +566,14 @@ class RacePlayer {
   }
   log(t, strong){ this.logs.push(strong?`<b>${esc(t)}</b>`:esc(t)); }
   tick(first){
-    const t = Date.now()+offset - this.startAt;
-    const sch=this.data.schedule; let changed=false;
-    while(this.idx<sch.length && sch[this.idx].at<=t){ this.apply(sch[this.idx++]); changed=true; }
-    if(changed||first) this.draw(first && t>0);
-    if(this.idx>=sch.length) clearInterval(RacePlayer.timer);
+    const t = Date.now()+offset;
+    const sch=this.data.items; let changed=false, n=0;
+    while(this.idx<sch.length && sch[this.idx].at<=t){ this.apply(sch[this.idx++]); changed=true; n++; }
+    // 刚打开页面（或刷新）时，已经播过的部分直接跳到结果，不放动画
+    if(changed||first) this.draw(first || n>3);
+    updateTurnUI();
   }
-  finishNow(){ clearInterval(RacePlayer.timer); const sch=this.data.schedule; while(this.idx<sch.length) this.apply(sch[this.idx++]); this.act=null; this.draw(true); }
+  finishNow(){ clearInterval(RacePlayer.timer); const sch=this.data.items; while(this.idx<sch.length) this.apply(sch[this.idx++]); this.act=null; this.draw(true); }
   draw(noanim){
     const T=S.track, cols=T.last+2-T.back;
     // 格子折叠阴影
@@ -568,7 +605,7 @@ class RacePlayer {
     const f=$('#flip');
     const fkey = this.cur ? 'k'+this.cur.k : (this.data ? 'wait' : 'idle');
     if(fkey===this.fkey){ /* 同一张牌，不重播翻牌动画 */ }
-    else if((this.fkey=fkey) && this.cur && this.cur.card){ const c=this.cur.card; f.innerHTML=`<div><div class="lbl">刚翻开</div><div class="bigcard ${mcls(c.m)}"><span class="e">${cardEmo(c)}</span><span class="t">${esc(c.m==null?'':MN[c.m])} ${esc(cardLabel(c))}</span></div></div>`; }
+    else if((this.fkey=fkey) && this.cur && this.cur.card){ const c=this.cur.card; f.innerHTML=`<div><div class="lbl">${this.cur.by?esc(this.cur.by)+' 翻开':'刚翻开'}</div><div class="bigcard ${mcls(c.m)}"><span class="e">${cardEmo(c)}</span><span class="t">${esc(c.m==null?'':MN[c.m])} ${esc(cardLabel(c))}</span></div></div>`; }
     else if(this.cur && this.cur.burn) f.innerHTML=`<div><div class="lbl">倒数 3、2、1…</div><div style="font-size:30px">🂠🂠🂠</div><div class="small muted">弃掉 3 张</div></div>`;
     else if(this.cur && this.cur.fold) f.innerHTML=`<div><div style="font-size:30px">🔄</div><b>牌堆用完，赛道折叠！</b></div>`;
     else if(this.data) f.innerHTML='<span class="muted">准备开跑…</span>';
@@ -587,7 +624,7 @@ function showRules(){
    · 附加赌注：猜这一场会不会发生某件事；冒险面猜对赔得多，猜错倒扣。<br>
    · 每叠票先被拿走的赔率最高。先手每场轮换。</p>
   <p><b>2. 暗中出牌：</b>每人从手牌里选 1 张（2 人局 2 张），偷偷加进比赛牌堆。牌堆共 18 张，其中一部分是公开的。</p>
-  <p><b>3. 比赛：</b>先弃掉 3 张，然后逐张翻牌：<br>
+  <p><b>3. 比赛：</b>程序先弃掉 3 张，然后<b>玩家轮流翻牌</b>：从本场选票先手的玩家开始，按顺序每人点一次「翻牌」，程序自动移动吉祥物；轮到的人 20 秒内没翻，程序替他翻。<br>
    · 数字牌：前进（负数后退）；⭐ 星星：冲到面对方向最近的星星格（终点后也有一颗）。<br>
    · 摔倒：之后每张牌只能爬 1 格；已经倒下又摔倒 → 击倒出局。<br>
    · 掉头：转身往回跑，负数牌反而让它朝终点跑。恢复：站起来并转回正向，再移动。<br>
